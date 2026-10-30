@@ -1,0 +1,85 @@
+{
+  "project_name": "build",
+  "entrypoint": "main.py",
+  "files": [
+    "main.py",
+    "README.md",
+    "src\\__init__.py",
+    "src\\models.py",
+    "src\\services.py",
+    "src\\api.py",
+    "tests\\__init__.py",
+    "migrations\\__init__.py",
+    "migrations\\001_initial.py",
+    "scripts\\seed.py",
+    "tests\\test_contract.py",
+    "requirements.txt"
+  ],
+  "commands": [
+    [
+      "python",
+      "main.py"
+    ]
+  ],
+  "dependency_graph": {
+    "src": [],
+    "src/models.py": [
+      "database"
+    ],
+    "src/services.py": [
+      "src/models.py"
+    ],
+    "src/api.py": [
+      "src/services.py"
+    ],
+    "migrations/001_initial.py": [
+      "src/models.py"
+    ],
+    "scripts/seed.py": [
+      "migrations/001_initial.py"
+    ],
+    "tests/test_contract.py": [
+      "src/api.py",
+      "scripts/seed.py"
+    ]
+  },
+  "migrations": [
+    {
+      "id": "001_initial",
+      "path": "migrations/001_initial.py",
+      "description": "Create the items table"
+    }
+  ],
+  "seed_scripts": [
+    "scripts/seed.py"
+  ],
+  "pipeline": [
+    {
+      "name": "migrate",
+      "command": [
+        "python",
+        "migrations/001_initial.py"
+      ],
+      "required": true
+    },
+    {
+      "name": "seed",
+      "command": [
+        "python",
+        "-c",
+        "from scripts.seed import seed; seed('data/app.db')"
+      ],
+      "required": true
+    },
+    {
+      "name": "tests",
+      "command": [
+        "python",
+        "-m",
+        "pytest",
+        "-q"
+      ],
+      "required": true
+    }
+  ]
+}
