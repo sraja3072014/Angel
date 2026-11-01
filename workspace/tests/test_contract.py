@@ -1,8 +1,14 @@
 import sqlite3
 from pathlib import Path
 
+WORKSPACE_DIR = Path(__file__).resolve().parent.parent
+DB_PATH = WORKSPACE_DIR / "data" / "app.db"
+
+
 def test_seed_fixture_exists():
-    db = Path('data/app.db')
-    assert db.exists()
-    with sqlite3.connect(db) as connection:
-        assert connection.execute('SELECT COUNT(*) FROM items').fetchone()[0] >= 1
+    assert DB_PATH.exists(), f"Database missing at {DB_PATH}"
+    with sqlite3.connect(DB_PATH) as connection:
+        row = connection.execute(
+            "SELECT name FROM items WHERE name = ?", ("fixture-item",)
+        ).fetchone()
+    assert row is not None, "Seeded item 'fixture-item' is missing"

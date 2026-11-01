@@ -1,0 +1,16 @@
+{
+  "workspace": "C:\\Users\\Raja\\Documents\\workspaces",
+  "fallback_workspace": "workspace",
+  "max_retries": 2,
+  "timeout_seconds": 60,
+  "container": {
+    "enabled": false,
+    "image": "python:3.11-slim@sha256:9635410349cba3531fabde484e07f14e625abb40e1bc8b23fffa046cb497ce2d",
+    "network": "none"
+  },
+  "human_approval": {
+    "scaffold": false,
+    "cached_repairs": false,
+    "git_commit": true
+  }
+}
