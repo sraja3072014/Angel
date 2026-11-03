@@ -1,7 +1,9 @@
-"""
-core/secret_redactor.py
+"""core/secret_redactor.py
 Centralized secret and credential redaction engine.
 """
+
+from __future__ import annotations
+
 import re
 
 SECRET_PATTERNS = [
@@ -12,6 +14,7 @@ SECRET_PATTERNS = [
     re.compile(r"sk-[a-zA-Z0-9_\-]{20,}"),
     re.compile(r"postgres(?:ql)?://[^\s:]+:([^\s@]+)@[^\s/]+"),
 ]
+
 
 def redact(text: str) -> str:
     """Masks sensitive credentials, keys, and tokens found in the input text."""
@@ -29,5 +32,19 @@ def redact(text: str) -> str:
 
     return redacted
 
-# Alias for backwards compatibility with tests
+
+# Alias for backwards compatibility with functions
 redact_secrets = redact
+
+
+class SecretRedactor:
+    """Object-oriented wrapper for secret and credential redaction."""
+
+    def redact(self, text: str) -> str:
+        return redact(text)
+
+    def redact_secrets(self, text: str) -> str:
+        return redact(text)
+
+    def __call__(self, text: str) -> str:
+        return redact(text)

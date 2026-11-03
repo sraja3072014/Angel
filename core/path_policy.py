@@ -93,3 +93,33 @@ def validate_workspace_relative_path(path_str: str, base_dir: Path) -> Path:
         raise WorkspacePathError(f"path escapes workspace: {path_str!r}") from error
     _reject_reparse_or_symlink(candidate, base, path_str)
     return resolved
+
+
+class PathPolicy:
+    """Multi-tenant and workspace path confinement policy."""
+
+    def __init__(self, base_dir: str | Path):
+        self.base_dir = Path(base_dir).resolve()
+
+    def resolve(self, path: str | Path) -> Path:
+        """Validate and resolve a path safely inside base_dir."""
+        if not self.base_dir.exists():
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+
+        if isinstance(path, Path) and path.is_absolute():
+            try:
+                rel = path.relative_to(self.base_dir)
+                path_str = rel.as_posix()
+            except ValueError as error:
+                raise WorkspacePathError(f"path escapes workspace: {str(path)!r}") from error
+        elif isinstance(path, str) and (path.startswith(("/", "\\")) or (len(path) >= 2 and path[1] == ":")):
+            candidate = Path(path).resolve()
+            try:
+                rel = candidate.relative_to(self.base_dir)
+                path_str = rel.as_posix()
+            except ValueError as error:
+                raise WorkspacePathError(f"path escapes workspace: {path!r}") from error
+        else:
+            path_str = str(path)
+
+        return validate_workspace_relative_path(path_str, self.base_dir)

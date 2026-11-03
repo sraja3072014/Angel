@@ -17,6 +17,7 @@ WORKSPACE_DIR = ROOT_DIR / "workspace"
 
 
 def test_local_subprocess_adds_user_site_to_pythonpath(monkeypatch, tmp_path):
+  monkeypatch.delenv("PYTHONPATH", raising=False)
   user_site = tmp_path / "site-packages"
   monkeypatch.setattr("core.executor.site.getusersitepackages", lambda: str(user_site))
   captured = {}

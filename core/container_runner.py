@@ -61,17 +61,24 @@ class ContainerRunner:
             raise ValueError(f"workspace does not exist: {root}")
         return root
 
-    def build_command(self, command: Sequence[str], workspace: str | os.PathLike[str], *, allow_network: bool = False) -> list[str]:
+    def build_command(self, command: Sequence[str], workspace: str | os.PathLike[str], *, allow_network: bool = False, env: dict[str, str] | None = None) -> list[str]:
         if not command or any(not isinstance(part, str) or not part for part in command):
             raise ValueError("container command must not be empty")
         self.policy.validate(allow_network=allow_network)
         root = self._workspace(workspace)
         network = "bridge" if allow_network else "none"
-        return [self._runtime(), "run", "--rm", "--init", "--user", self.policy.user, "--network", network, "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory", self.policy.memory, "--cpus", self.policy.cpus, "--pids-limit", str(self.policy.pids_limit), "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", f"type=bind,source={root},target=/workspace,readonly", "--workdir", "/workspace", self.policy.image, *command]
+        container_env = []
+        if env:
+            from .executor import ALLOWED_ENV_VARS
+
+            if any(key not in ALLOWED_ENV_VARS for key in env):
+                raise ValueError("container environment contains a variable outside the allowlist")
+            for key, value in env.items():
+                container_env.extend(("--env", f"{key}={value}"))
+        return [self._runtime(), "run", "--rm", "--init", "--user", self.policy.user, "--network", network, "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--memory", self.policy.memory, "--cpus", self.policy.cpus, "--pids-limit", str(self.policy.pids_limit), "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", f"type=bind,source={root},target=/workspace,readonly", "--workdir", "/workspace", *container_env, self.policy.image, *command]
 
     def run(self, command: Sequence[str], workspace: str | os.PathLike[str], *, allow_network: bool = False, timeout: float | None = None, env: dict[str, str] | None = None) -> "ExecutionResult":
-        del env  # Container executions never inherit or receive host secrets.
-        argv = self.build_command(command, workspace, allow_network=allow_network)
+        argv = self.build_command(command, workspace, allow_network=allow_network, env=env)
         from .executor import ExecutionResult
         try:
             completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout or self.policy.timeout, shell=False, check=False, env={})

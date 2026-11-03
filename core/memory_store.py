@@ -8,7 +8,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 from .secret_redactor import redact
 
@@ -94,8 +94,11 @@ class RepairMemoryStore:
             cursor = connection.execute("""INSERT INTO repair_memory
                 (signature, traceback, faulty_file, exception_type, normalized_traceback, ast_context, patch, resolution, confidence)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", (signature, safe_traceback, safe_file, redact(exception_type), normalized, safe_ast, safe_patch, safe_resolution, min(1.0, max(0.0, float(confidence)))))
-            connection.execute("INSERT INTO repair_fts(rowid, faulty_file, exception_type, normalized_traceback, resolution) VALUES (?, ?, ?, ?, ?)", (cursor.lastrowid, safe_file, redact(exception_type), normalized, safe_resolution))
-            return int(cursor.lastrowid)
+            row_id = cursor.lastrowid
+            if row_id is None:
+                raise sqlite3.DatabaseError("INSERT did not return a row id")
+            connection.execute("INSERT INTO repair_fts(rowid, faulty_file, exception_type, normalized_traceback, resolution) VALUES (?, ?, ?, ?, ?)", (row_id, safe_file, redact(exception_type), normalized, safe_resolution))
+            return int(row_id)
 
     def retrieve(self, *, traceback: str, faulty_file: str = "", ast_context: Mapping[str, object] | None = None, limit: int = 5) -> list[RepairMemory]:
         if limit <= 0:
@@ -122,6 +125,23 @@ class RepairMemoryStore:
                 score = min(1.0, score + 0.2)
             matches.append(RepairMemory(int(row["id"]), score, row["traceback"], row["faulty_file"], decoded, row["patch"], row["resolution"], float(row["confidence"])))
         return matches
+
+    def search(self, query: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Query FTS5 memory store and return dictionary matches."""
+        results = self.retrieve(traceback=query, limit=limit)
+        return [
+            {
+                "id": m.id,
+                "score": m.score,
+                "traceback": m.traceback,
+                "faulty_file": m.faulty_file,
+                "ast_context": m.ast_context,
+                "patch": m.patch,
+                "resolution": m.resolution,
+                "confidence": m.confidence,
+            }
+            for m in results
+        ]
 
     def _quarantine(self, memory_id: int) -> None:
         with self._connect() as connection:
