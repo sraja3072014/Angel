@@ -1,0 +1,56 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Node & dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Environment, secrets & local database caches
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.sqlite
+*.sqlite3
+*.db
+
+# Rust / Cargo output
+src-tauri/target/
+target/
+Cargo.lock
+
+# Tauri Android & iOS generated projects
+src-tauri/gen/
+gen/
+
+# Large binaries, models & archives
+*.zip
+*.tar
+*.gz
+*.rar
+*.7z
+*.onnx
+*.bin
+*.exe
+*.msi
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+Thumbs.db

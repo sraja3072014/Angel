@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+html, body, #root {
+  background: transparent !important;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 1. Brahma AI Zero-Gravity Idle Hover & Breathing */
+@keyframes brahmaIdle {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.015);
+  }
+}
+
+/* 2. Listening Pose: கவனமாக முன்னோக்கிச் சாய்ந்து கேட்டல் */
+@keyframes brahmaListen {
+  0%, 100% {
+    transform: translateY(-4px) scale(1.03) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-10px) scale(1.045) rotate(1deg);
+  }
+}
+
+/* 3. Speaking Pose: உரையாடும்போது துடிப்பான அசைவு */
+@keyframes brahmaSpeak {
+  0%, 100% {
+    transform: translateY(-6px) scale(1.03) rotate(0deg);
+  }
+  25% {
+    transform: translateY(-11px) scale(1.045) rotate(0.8deg);
+  }
+  50% {
+    transform: translateY(-7px) scale(1.025) rotate(-0.8deg);
+  }
+  75% {
+    transform: translateY(-12px) scale(1.042) rotate(0.5deg);
+  }
+}
+
+/* 4. Hologram Scanline Beam (மேலிருந்து கீழாக ஸ்கேன் செய்யும் ஒளி) */
+@keyframes holoScanBeam {
+  0% {
+    top: 5%;
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.75;
+  }
+  80% {
+    opacity: 0.75;
+  }
+  100% {
+    top: 92%;
+    opacity: 0;
+  }
+}
+
+/* 5. 3D Hologram Base Rings */
+@keyframes spinClockwise {
+  from { transform: rotateX(75deg) rotateZ(0deg); }
+  to   { transform: rotateX(75deg) rotateZ(360deg); }
+}
+
+@keyframes spinCounterClockwise {
+  from { transform: rotateX(75deg) rotateZ(360deg); }
+  to   { transform: rotateX(75deg) rotateZ(0deg); }
+}
+
+.brahma-idle {
+  animation: brahmaIdle 4.5s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+.brahma-listen {
+  animation: brahmaListen 2s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+.brahma-speak {
+  animation: brahmaSpeak 0.85s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+.holo-scanline {
+  animation: holoScanBeam 3.5s linear infinite;
+}
+
+.ring-outer {
+  animation: spinClockwise 12s linear infinite;
+}
+
+.ring-inner {
+  animation: spinCounterClockwise 7s linear infinite;
+}
