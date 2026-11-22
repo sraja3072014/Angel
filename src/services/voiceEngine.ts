@@ -208,10 +208,28 @@ export class AngelVoiceEngine {
       };
 
       this.vadAnimationId = requestAnimationFrame(checkSilence);
-    } catch {
-      // WebView2 Mic fallback: Rust Offline Speech Recognition
-      await this.runRustOfflineMic();
+    } catch (err) {
+      this.onStatusChange("Unable to access the microphone. Please check settings.", false);
+      try {
+        await this.runRustOfflineMic();
+      } catch {
+        throw err;
+      }
     }
+  }
+
+  public isRecording(): boolean {
+    return this.mediaRecorder !== null && this.mediaRecorder.state === "recording";
+  }
+
+  public stopRecording() {
+    if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
+      try {
+        this.mediaRecorder.stop();
+      } catch {}
+    }
+    this.stopVAD();
+    this.onAudioLevelChange?.(0);
   }
 
   private stopVAD() {

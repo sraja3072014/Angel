@@ -90,9 +90,10 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     if (!mountRef.current || !containerRef.current) return;
 
     const getBoxSize = () => {
-      const rect = containerRef.current!.getBoundingClientRect();
-      const size = Math.max(200, Math.min(rect.width - 12, rect.height - 48));
-      return { width: size, height: size };
+      const rect = containerRef.current?.getBoundingClientRect();
+      const width = rect?.width || window.innerWidth;
+      const height = rect?.height || window.innerHeight;
+      return { width, height };
     };
 
     let { width, height } = getBoxSize();
@@ -396,10 +397,10 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full rounded-2xl bg-white/[0.03] border border-cyan-300/20 flex flex-col items-center justify-center p-2 overflow-hidden select-none"
+      className="relative w-full h-full flex flex-col items-center justify-center overflow-hidden select-none"
     >
       {/* Live Local Weather Overlay Compact Glass Pill */}
-      <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/70 border border-cyan-400/30 backdrop-blur-md text-white shadow-lg pointer-events-auto">
+      <div className="absolute top-3 left-4 z-20 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/70 border border-cyan-400/30 backdrop-blur-md text-white shadow-lg pointer-events-auto">
         <CloudSun size={15} className="text-amber-400 animate-pulse shrink-0" />
         <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-200">
           <span>{weather.location}</span>
@@ -414,35 +415,17 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
 
       {/* Radial Glow Behind Earth */}
       <div
-        className={`absolute w-52 h-52 rounded-full blur-3xl transition-all duration-500 pointer-events-none ${
+        className={`absolute w-[500px] h-[500px] rounded-full blur-3xl transition-all duration-700 pointer-events-none ${
           speaking
-            ? "bg-emerald-400/30 scale-115"
+            ? "bg-emerald-500/25 scale-120"
             : listening
-            ? "bg-rose-400/30 scale-110"
-            : "bg-cyan-400/25 scale-100"
+            ? "bg-rose-500/25 scale-110"
+            : "bg-cyan-500/15 scale-100"
         }`}
       />
 
       {/* Fitted 3D Satellite Hologram Earth Canvas */}
-      <div ref={mountRef} className="flex items-center justify-center z-10" />
-
-      {/* Status Badge */}
-      <div className="z-20 mt-1 flex items-center gap-2 px-3.5 py-1 rounded-full bg-slate-950/75 border border-cyan-400/40 text-[11px] font-bold tracking-widest uppercase text-cyan-200 shadow-lg">
-        <span
-          className={`w-2 h-2 rounded-full ${
-            speaking
-              ? "bg-emerald-400 animate-ping"
-              : listening
-              ? "bg-rose-400 animate-ping"
-              : "bg-cyan-400"
-          }`}
-        />
-        {speaking
-          ? "ANGEL AI • SPEAKING"
-          : listening
-          ? "ANGEL AI • LISTENING"
-          : "ORBITAL EARTH • ONLINE"}
-      </div>
+      <div ref={mountRef} className="w-full h-full flex items-center justify-center pointer-events-none z-10" />
     </div>
   );
 }

@@ -1,26 +1,51 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
-  Mic,
-  Shield,
-  Send,
-  X,
-  Globe,
-  Activity,
-  Stethoscope,
+  PanelLeft,
   Clock,
-  Radio,
-  AlertTriangle,
-  Lock,
+  Plus,
+  Search,
+  Sparkles,
+  Upload,
+  HardDrive,
+  ChevronRight,
+  ChevronDown,
+  Mic,
+  Send,
+  Image,
+  Video,
+  Music,
+  Code,
+  BookOpen,
+  User,
+  Layout,
+  GraduationCap,
   Eye,
-  Menu,
+  Volume2,
+  Copy,
+  Check,
+  X,
+  Radio,
+  Smartphone,
+  AlertTriangle,
+  Minus,
 } from "lucide-react";
 import "./App.css";
 import { CloudBrainService } from "./services/cloudBrain";
 import { AngelVoiceEngine } from "./services/voiceEngine";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { HoloEarthStage } from "./components/HoloEarthStage";
+import { GeminiSidebar } from "./components/GeminiSidebar";
+
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+  actionExecuted?: string;
+}
 
 interface ThreatAlertPayload {
   file_name: string;
@@ -31,30 +56,51 @@ interface ThreatAlertPayload {
   timestamp: string;
 }
 
-interface SchedulerAlertPayload {
-  task_id: string;
-  title: string;
-  message: string;
-  timestamp: string;
-}
-
 const brain = new CloudBrainService();
 
 export default function App() {
   const voiceRef = useRef<AngelVoiceEngine | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [, setRamMb] = useState<string>("28.0");
+  // Layout & Navigation State
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showGetAppModal, setShowGetAppModal] = useState(false);
+  const [temporaryChat, setTemporaryChat] = useState(false);
+
+  // Workspace Mode: "chat" vs "task"
+  const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task">("chat");
+
+  // AI Model Ladder Selector
+  const [selectedModel, setSelectedModel] = useState<string>("Auto • Gemini 3.5");
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+
+  // Tools Selector
+  const [selectedTool, setSelectedTool] = useState<string>("Tools");
+  const [showToolsDropdown, setShowToolsDropdown] = useState(false);
+
+  // Left Plus Menu Popovers
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [showMoreUploads, setShowMoreUploads] = useState(false);
+
+  // Chat & Conversation State
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [reply, setReply] = useState("Welcome Raja! Project Angel V3 Global Command Center is online.");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Voice & Audio State
   const [speaking, setSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
   const [audioLevel, setAudioLevel] = useState<number>(0);
-  const [wakeEnabled, setWakeEnabled] = useState<boolean>(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [micErrorMessage, setMicErrorMessage] = useState<string | null>(null);
+
+  // Live Threat Notification
   const [activeThreat, setActiveThreat] = useState<ThreatAlertPayload | null>(null);
 
+  // Clock
   const [now, setNow] = useState<Date>(new Date());
-
   useEffect(() => {
     const clockTimer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(clockTimer);
@@ -73,419 +119,772 @@ export default function App() {
     month: "short",
   });
 
-  const handleCommand = async (userCmd: string) => {
-    if (!userCmd.trim()) return;
-    setReply("Processing...");
+  // Auto-scroll on new message
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isProcessing]);
 
-    try {
-      const localRes = await invoke<string>("execute_os_reflex", { command: userCmd });
-      if (localRes !== "CLOUD_BRAIN") {
-        setReply(localRes);
-        voiceRef.current?.speak(localRes, () => setSpeaking(true), () => setSpeaking(false));
-        return;
-      }
-    } catch {}
-
-    // Streaming Gemini AI with immediate first-sentence speech
-    const aiReply = await brain.askGemini(userCmd, {
-      onChunk: (partialText) => setReply(partialText),
-      onFirstSentence: (firstSentence) => {
-        voiceRef.current?.speak(firstSentence, () => setSpeaking(true), () => setSpeaking(false));
-      },
-    });
-    setReply(aiReply);
-  };
-
-  const handleScreenVision = async () => {
-    setReply("Screen Vision: Capturing primary screen in RAM...");
-    try {
-      const b64 = await invoke<string>("capture_screen_base64");
-      setReply("Screen Vision: Analyzing live screen with Gemini Multimodal AI...");
-      const prompt = "Look at my screen right now. Explain what is visible, diagnose any open dialogs or errors, and provide a helpful summary.";
-      const aiReply = await brain.askGemini(prompt, {
-        screenBase64: b64,
-        onChunk: (partial) => setReply(partial),
-        onFirstSentence: (first) => {
-          voiceRef.current?.speak(first, () => setSpeaking(true), () => setSpeaking(false));
-        },
-      });
-      setReply(aiReply);
-    } catch (err: any) {
-      setReply(`Screen Vision: ${err}`);
-    }
-  };
-
+  // Voice Engine Setup
   useEffect(() => {
     voiceRef.current = new AngelVoiceEngine(
       () => {
-        // Wake detected
-        setReply("Listening: 'Hey Angel' detected...");
         setListening(true);
+        setMicErrorMessage(null);
       },
-      (cmd: string) => handleCommand(cmd),
-      (status: string, isListening: boolean) => {
-        setReply(status);
-        setListening(isListening);
+      (recognizedCmd: string) => {
+        handleSendMessage(recognizedCmd);
+      },
+      (status: string, isList: boolean) => {
+        setListening(isList);
+        if (status.includes("Unable to access the microphone")) {
+          setMicErrorMessage("Unable to access the microphone. Please check settings.");
+        }
       },
       (level: number) => {
         setAudioLevel(level);
       }
     );
 
-    // Start listening for remote commands dispatched from Android companion
+    // Cross-Device Relay Listener (commands sent from Android companion)
     brain.startMobileRelayListener((mobileCmd) => {
-      handleCommand(mobileCmd);
+      handleSendMessage(mobileCmd);
     });
   }, []);
 
-  // Rust Real-Time AI Antivirus Alert Listener
+  // Rust Real-Time Threat Alerts
   useEffect(() => {
-    const handleAlert = (rawPayload: any) => {
-      try {
-        const payload: ThreatAlertPayload =
-          typeof rawPayload === "string" ? JSON.parse(rawPayload) : rawPayload;
-
-        setActiveThreat(payload);
-        setReply(`⚠️ THREAT DETECTED: ${payload.file_name} (${payload.threat_type || payload.risk_level})`);
-        voiceRef.current?.speak(
-          `Security Alert Raja! A suspicious file, ${payload.file_name}, was detected in your system.`,
-          () => setSpeaking(true),
-          () => setSpeaking(false)
-        );
-      } catch {
-        setReply(String(rawPayload));
-      }
-    };
-
-    const unlisten1Promise = listen<ThreatAlertPayload | string>("aegis_threat_detected", (event) => {
-      handleAlert(event.payload);
-    });
-
-    const unlisten2Promise = listen<ThreatAlertPayload | string>("aegis_security_alert", (event) => {
-      handleAlert(event.payload);
-    });
-
-    const unlisten3Promise = listen<ThreatAlertPayload | string>("ThreatAlert", (event) => {
-      handleAlert(event.payload);
-    });
-
-    // Autonomous Background Scheduler & Watchdog Alert Listener
-    const unlistenSchedulerPromise = listen<SchedulerAlertPayload | string>("angel_scheduler_alert", (event) => {
-      try {
-        const p: SchedulerAlertPayload = typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload;
-        setReply(`⏰ WATCHDOG ALERT: ${p.title} — ${p.message}`);
-        voiceRef.current?.speak(p.message, () => setSpeaking(true), () => setSpeaking(false));
-      } catch {
-        setReply(`⏰ Watchdog Alert: ${String(event.payload)}`);
+    const unlisten = listen<ThreatAlertPayload>("aegis_threat_detected", (event) => {
+      if (event.payload) {
+        setActiveThreat(event.payload);
       }
     });
-
     return () => {
-      unlisten1Promise.then((unlisten) => unlisten());
-      unlisten2Promise.then((unlisten) => unlisten());
-      unlisten3Promise.then((unlisten) => unlisten());
-      unlistenSchedulerPromise.then((unlisten) => unlisten());
+      unlisten.then((f) => f());
     };
   }, []);
 
-  // Live RAM Telemetry
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        const mb = await invoke<number>("get_angel_ram_mb");
-        setRamMb(mb.toFixed(1));
-      } catch {}
-    }, 3000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const handleOpenSecuritySuite = async (tab: string) => {
+  // Open dedicated K7 Security Suite window
+  const handleOpenSecuritySuite = async (tab: string = "antivirus") => {
     try {
       await invoke("open_security_suite", { initialTab: tab });
-    } catch {
-      if (tab === "antivirus") handleCommand("system scan");
-      else if (tab === "firewall") handleCommand("firewall status");
-      else if (tab === "doctor") handleCommand("windows error");
+    } catch (err) {
+      console.warn("Failed to open security suite window:", err);
     }
   };
 
-  const handleToggleWake = () => {
-    const active = voiceRef.current?.toggleWakeWord();
-    setWakeEnabled(!!active);
+  // Click-to-Toggle Microphone: First click starts, Second click stops
+  const handleToggleMicrophone = async () => {
+    setMicErrorMessage(null);
+
+    if (listening || voiceRef.current?.isRecording()) {
+      // Second click: stop recording immediately and transcribe
+      voiceRef.current?.stopRecording();
+      setListening(false);
+    } else {
+      // First click: start recording with VAD
+      try {
+        await voiceRef.current?.listenWithVAD(true);
+      } catch {
+        setListening(false);
+        setMicErrorMessage("Unable to access the microphone. Please check settings.");
+      }
+    }
   };
 
-  const handleQuarantine = async (filePath: string) => {
+  // Send Message Handler
+  const handleSendMessage = async (textToSend?: string, screenB64?: string) => {
+    const prompt = (textToSend ?? input).trim();
+    if (!prompt || isProcessing) return;
+
+    setInput("");
+    setShowPlusMenu(false);
+    setShowToolsDropdown(false);
+    setShowModelDropdown(false);
+    setMicErrorMessage(null);
+
+    const userMsgId = `user_${Date.now()}`;
+    const userMsg: ChatMessage = {
+      id: userMsgId,
+      role: "user",
+      text: prompt,
+      timestamp: formattedTime,
+    };
+
+    setMessages((prev) => [...prev, userMsg]);
+    setIsProcessing(true);
+
+    const assistantMsgId = `assistant_${Date.now()}`;
+    const initialAssistantMsg: ChatMessage = {
+      id: assistantMsgId,
+      role: "assistant",
+      text: "",
+      timestamp: formattedTime,
+    };
+
+    setMessages((prev) => [...prev, initialAssistantMsg]);
+
     try {
-      let res = "";
-      try {
-        res = await invoke<string>("quarantine_file", { filePath });
-      } catch {
-        res = await invoke<string>("quarantine_threat_file", { filePath });
+      // 1. Check local Rust OS reflex if in Task mode or standard prompt
+      if (workspaceMode === "task") {
+        try {
+          const localRes = await invoke<string>("execute_os_reflex", { command: prompt });
+          if (localRes !== "CLOUD_BRAIN") {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId
+                  ? { ...m, text: localRes, actionExecuted: "OS Reflex Executed" }
+                  : m
+              )
+            );
+            setIsProcessing(false);
+            voiceRef.current?.speak(localRes, () => setSpeaking(true), () => setSpeaking(false));
+            return;
+          }
+        } catch {}
       }
-      setReply(res);
+
+      // 2. Query Gemini AI with streaming response
+      const fullReply = await brain.askGemini(prompt, {
+        screenBase64: screenB64,
+        onChunk: (chunk) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMsgId ? { ...m, text: chunk } : m))
+          );
+        },
+        onFirstSentence: (firstSentence) => {
+          voiceRef.current?.speak(firstSentence, () => setSpeaking(true), () => setSpeaking(false));
+        },
+      });
+
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantMsgId ? { ...m, text: fullReply } : m))
+      );
+    } catch (err: any) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantMsgId
+            ? { ...m, text: `⚠️ Error processing request: ${err?.message || err}` }
+            : m
+        )
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Clear / New Chat
+  const handleNewChat = () => {
+    setMessages([]);
+    setInput("");
+    setMicErrorMessage(null);
+  };
+
+  // Screen Vision AI
+  const handleScreenVision = async () => {
+    try {
+      setIsProcessing(true);
+      const b64 = await invoke<string>("capture_screen_base64");
+      const prompt = "Look at my screen right now. Explain what is visible and summarize any open dialogs or errors.";
+      handleSendMessage(prompt, b64);
+    } catch (err: any) {
+      setIsProcessing(false);
+      setMicErrorMessage(`Screen Vision error: ${err}`);
+    }
+  };
+
+  // Quarantine threat file
+  const handleQuarantineThreat = async (filePath: string) => {
+    try {
+      await invoke("quarantine_file", { filePath });
       setActiveThreat(null);
       voiceRef.current?.speak(
-        "Threat successfully isolated in quarantine vault.",
+        "Threat isolated in Quarantine Vault.",
         () => setSpeaking(true),
         () => setSpeaking(false)
       );
     } catch (err: any) {
-      setReply(`Quarantine error: ${err}`);
+      console.warn("Quarantine error:", err);
     }
   };
 
+  // Window control helpers
+  const handleMinimize = () => {
+    try {
+      getCurrentWebviewWindow().minimize();
+    } catch {}
+  };
+  const handleHideToTray = () => {
+    try {
+      getCurrentWebviewWindow().hide();
+    } catch {
+      window.close();
+    }
+  };
+
+  const handleCopyText = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
   return (
-    <div className="h-screen w-screen p-2 sm:p-3 flex items-center justify-center bg-transparent select-none overflow-hidden">
-      {/* Crystal-Clear Translucent Glassmorphism Main Container */}
-      <div
-        data-tauri-drag-region
-        className="w-full h-full rounded-3xl border border-cyan-300/50 bg-slate-950/50 backdrop-blur-2xl shadow-[0_0_50px_rgba(0,240,255,0.22)] p-4 sm:p-6 flex flex-col justify-between text-white relative overflow-hidden"
-      >
-        {/* Top Header Bar */}
-        <div data-tauri-drag-region className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-            <span className="text-base sm:text-lg font-extrabold tracking-widest text-cyan-300 drop-shadow">
-              ✦ ANGEL AI
+    <div className="h-screen w-screen flex bg-slate-950 text-white select-none overflow-hidden font-sans relative">
+      {/* 1. AMBIENT 3D SATELLITE EARTH BACKGROUND LAYER */}
+      <div className="fixed inset-0 z-0 pointer-events-none opacity-65 overflow-hidden">
+        <HoloEarthStage speaking={speaking} listening={listening} />
+      </div>
+
+      {/* 2. LEFT COLLAPSIBLE SIDEBAR */}
+      <GeminiSidebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        onNewChat={handleNewChat}
+        onOpenSettings={() => setShowSettings(true)}
+        onOpenSecuritySuite={() => handleOpenSecuritySuite("antivirus")}
+        onSelectPrompt={(p) => handleSendMessage(p)}
+      />
+
+      {/* 3. MAIN WORKSPACE */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden relative z-10 backdrop-blur-sm">
+        {/* TOP HEADER BAR */}
+        <header
+          data-tauri-drag-region
+          className="h-14 px-4 bg-slate-950/40 border-b border-white/10 backdrop-blur-xl flex items-center justify-between shrink-0 select-none"
+        >
+          {/* Left branding */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              title="Toggle sidebar"
+              className="p-2 rounded-xl hover:bg-white/10 text-slate-300 hover:text-white transition"
+            >
+              <PanelLeft size={18} />
+            </button>
+
+            <span className="text-base font-extrabold tracking-wide text-white drop-shadow flex items-center gap-1.5">
+              <span className="text-cyan-400">✦</span> Angel AI
             </span>
-            <span className="hidden sm:flex px-3 py-1 rounded-full bg-white/5 border border-cyan-400/30 text-xs font-mono text-cyan-100 items-center gap-1.5">
-              <Clock size={13} className="text-cyan-400" />
-              <span className="text-cyan-300 font-semibold">{formattedTime}</span>
-              <span className="text-slate-400 text-[11px]">• {formattedDate}</span>
+
+            <span className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-cyan-200">
+              <Clock size={12} className="text-cyan-400" />
+              <span>{formattedTime}</span>
+              <span className="text-slate-400 text-[10px]">• {formattedDate} (IST)</span>
             </span>
           </div>
 
+          {/* Right actions */}
           <div className="flex items-center gap-2">
-            {/* Wake Word Status Pill */}
+            {/* Get App Companion Button */}
             <button
-              onClick={handleToggleWake}
-              title="Toggle Hands-Free Wake Word ('Hey Angel')"
-              className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition ${
-                wakeEnabled
-                  ? "bg-emerald-500/30 border-emerald-400/60 text-emerald-200 shadow-[0_0_12px_rgba(52,211,153,0.3)]"
+              onClick={() => setShowGetAppModal(true)}
+              className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-200 flex items-center gap-1.5 transition"
+            >
+              <Smartphone size={14} className="text-cyan-400" />
+              <span className="hidden sm:inline">Get app</span>
+            </button>
+
+            {/* Turn on Temporary Chat Toggle Pill */}
+            <button
+              onClick={() => setTemporaryChat(!temporaryChat)}
+              title="Turn on temporary chat (messages are not saved to history)"
+              className={`px-3 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1.5 transition ${
+                temporaryChat
+                  ? "bg-amber-500/20 border-amber-400/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.3)]"
                   : "bg-white/5 border-white/10 hover:bg-white/10 text-slate-400"
               }`}
             >
-              <Radio size={14} className={wakeEnabled ? "animate-pulse text-emerald-300" : ""} />
-              <span>Wake: {wakeEnabled ? "ON" : "OFF"}</span>
+              <Radio size={12} className={temporaryChat ? "animate-pulse text-amber-400" : ""} />
+              <span>{temporaryChat ? "Temporary ON" : "Turn on temporary chat"}</span>
             </button>
 
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="px-3.5 py-1.5 sm:py-2 rounded-xl bg-cyan-500/20 border border-cyan-300/40 hover:bg-cyan-500/35 text-cyan-100 text-xs font-bold flex items-center gap-1.5 transition"
-            >
-              <Menu size={15} /> Menu
-            </button>
-
-            <button
-              onClick={() => window.close()}
-              title="Minimize to System Tray"
-              className="p-1.5 sm:p-2 rounded-xl bg-rose-500/25 border border-rose-400/40 hover:bg-rose-500/45 text-rose-200 transition"
-            >
-              <X size={17} />
-            </button>
+            {/* Window controls */}
+            <div className="flex items-center gap-1 pl-2 border-l border-white/10">
+              <button
+                onClick={handleMinimize}
+                title="Minimize"
+                className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition"
+              >
+                <Minus size={15} />
+              </button>
+              <button
+                onClick={handleHideToTray}
+                title="Minimize to System Tray"
+                className="p-1.5 rounded-lg hover:bg-rose-600 text-slate-400 hover:text-white transition"
+              >
+                <X size={15} />
+              </button>
+            </div>
           </div>
-        </div>
+        </header>
 
-        {/* Real-Time Interactive Threat Alert Card Overlay */}
+        {/* Real-time Threat Alert Toast Banner */}
         {activeThreat && (
-          <div className="my-2 p-3 sm:p-4 rounded-2xl bg-rose-950/80 border-2 border-rose-500/80 backdrop-blur-xl shadow-[0_0_35px_rgba(244,63,94,0.4)] flex flex-col sm:flex-row items-center justify-between gap-3 animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-center gap-3 overflow-hidden w-full">
-              <div className="p-2.5 rounded-xl bg-rose-500/30 border border-rose-400/50 text-rose-200 shrink-0">
-                <AlertTriangle size={22} className="animate-bounce" />
-              </div>
+          <div className="mx-4 my-2 p-3 rounded-2xl bg-rose-950/80 border border-rose-500/80 backdrop-blur-xl shadow-lg flex items-center justify-between gap-3 animate-in fade-in duration-200">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <AlertTriangle size={18} className="text-rose-400 shrink-0 animate-bounce" />
               <div className="overflow-hidden">
-                <div className="flex items-center gap-2">
-                  <span className="font-extrabold text-xs sm:text-sm text-rose-200 uppercase tracking-wide">
-                    Threat Detected
-                  </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/40 text-rose-100 border border-rose-300/40">
-                    {activeThreat.risk_level} RISK
-                  </span>
+                <div className="text-xs font-bold text-white truncate">
+                  Threat Blocked: {activeThreat.file_name} ({activeThreat.threat_type})
                 </div>
-                <div className="text-xs font-semibold text-white truncate max-w-lg">
-                  {activeThreat.file_name} — <span className="text-rose-200/80">{activeThreat.threat_type}</span>
-                </div>
-                <div className="text-[11px] text-slate-300 font-mono truncate max-w-lg">
-                  {activeThreat.file_path}
-                </div>
+                <div className="text-[10px] text-slate-300 font-mono truncate">{activeThreat.file_path}</div>
               </div>
             </div>
-
-            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end">
+            <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => handleQuarantine(activeThreat.file_path)}
-                className="px-3.5 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-rose-900/50 transition"
+                onClick={() => handleQuarantineThreat(activeThreat.file_path)}
+                className="px-3 py-1 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
               >
-                <Lock size={14} /> Quarantine Now
+                Quarantine
               </button>
               <button
                 onClick={() => setActiveThreat(null)}
-                className="px-3 py-1.5 sm:py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-slate-300 text-xs font-bold transition"
+                className="p-1 rounded-lg text-slate-300 hover:text-white"
               >
-                Ignore
+                <X size={14} />
               </button>
             </div>
           </div>
         )}
 
-        {/* Main Body: Responsive Desktop & Android Layout */}
-        {showSettings ? (
-          <SettingsDrawer
-            onClose={() => setShowSettings(false)}
-            onSyncCloud={() => brain.syncWithSupabase()}
-            onTestVoice={() =>
-              voiceRef.current?.speak(
-                "Hello Raja, Project Angel neural voice system is online and ready.",
-                () => setSpeaking(true),
-                () => setSpeaking(false)
-              )
-            }
-          />
-        ) : (
-          <div className="flex-1 grid grid-cols-1 md:grid-cols-12 gap-4 items-center my-2 overflow-y-auto md:overflow-hidden">
-            {/* LEFT SIDE: 3D Satellite Hologram Earth Globe (Responsive on Mobile) */}
-            <div className="col-span-1 md:col-span-5 h-[220px] sm:h-[260px] md:h-full flex items-center justify-center">
-              <HoloEarthStage speaking={speaking} listening={listening} />
+        {/* Microphone Error Notice */}
+        {micErrorMessage && (
+          <div className="mx-auto my-2 px-4 py-2 rounded-2xl bg-rose-950/80 border border-rose-400 text-xs font-semibold text-rose-200 flex items-center gap-2 shadow-lg z-30">
+            <AlertTriangle size={15} className="text-rose-400 shrink-0" />
+            <span>{micErrorMessage}</span>
+            <button onClick={() => setMicErrorMessage(null)} className="ml-2 hover:text-white">
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* CENTER WORKSPACE BODY */}
+        <main className="flex-1 overflow-y-auto px-4 py-6 flex flex-col justify-between">
+          {/* CASE A: No messages yet -> Clean Hero Greeting */}
+          {messages.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center max-w-2xl mx-auto space-y-7 my-auto">
+              {/* Hero Greeting */}
+              <div className="space-y-2">
+                <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-md">
+                  Where should we start?
+                </h1>
+                <p className="text-xs sm:text-sm text-slate-300/80 max-w-md mx-auto">
+                  Sovereign Windows 11 desktop AI companion. Chat, run multi-action system reflexes, or inspect security.
+                </p>
+              </div>
+
+              {/* Quick Suggestion Pills */}
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {[
+                  "Scan system for threats",
+                  "Turn volume to 80% & take screenshot",
+                  "Explain Rust async Tokio architecture",
+                  "Check Koduvai live weather report",
+                ].map((sugg, i) => (
+                  <button
+                    key={i}
+                    onClick={() => handleSendMessage(sugg)}
+                    className="px-3.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 hover:text-white transition"
+                  >
+                    {sugg}
+                  </button>
+                ))}
+              </div>
             </div>
-
-            {/* RIGHT SIDE: Global Settings & Command Console */}
-            <div className="col-span-1 md:col-span-7 h-full flex flex-col justify-between py-1 sm:py-2 space-y-2">
-              {/* Top Panel: Quick OS Reflex Cards */}
-              <div className="bg-white/5 border border-cyan-300/25 rounded-2xl p-3 sm:p-4 space-y-2.5">
-                <div className="text-xs font-extrabold tracking-wider text-cyan-300 flex items-center gap-2 uppercase border-b border-cyan-400/20 pb-1.5">
-                  <Globe size={15} /> Global and System Settings
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-1 gap-2">
-                  <button
-                    onClick={() => handleOpenSecuritySuite("antivirus")}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-400/40 hover:bg-emerald-500/30 text-xs sm:text-sm font-bold text-left flex items-center gap-2.5 transition"
-                  >
-                    <Shield size={16} className="text-emerald-400 shrink-0" />
-                    <span className="truncate">Run AI Antivirus</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleOpenSecuritySuite("firewall")}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-sky-500/15 border border-sky-400/40 hover:bg-sky-500/30 text-xs sm:text-sm font-bold text-left flex items-center gap-2.5 transition"
-                  >
-                    <Activity size={16} className="text-sky-400 shrink-0" />
-                    <span className="truncate">Check AI Smart Firewall</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleOpenSecuritySuite("doctor")}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-amber-500/15 border border-amber-400/40 hover:bg-amber-500/30 text-xs sm:text-sm font-bold text-left flex items-center gap-2.5 transition"
-                  >
-                    <Stethoscope size={16} className="text-amber-300 shrink-0" />
-                    <span className="truncate">OS Doctor Diagnostics</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Middle: AI Progressive Response Box */}
-              <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-950/50 border border-cyan-300/30 min-h-[90px] max-h-[120px] sm:max-h-[140px] overflow-y-auto flex items-center">
-                <p className="text-xs sm:text-sm leading-relaxed text-cyan-50 select-text">{reply}</p>
-              </div>
-
-              {/* Bottom: Voice Mic + Audio Visualizer + Screen Vision + Command Input */}
-              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
-                <button
-                  onClick={() => voiceRef.current?.listenOnce(true)}
-                  title="Speak Live Command (VAD auto-stop on silence)"
-                  className={`p-3 sm:p-3.5 rounded-2xl border transition flex items-center justify-center shrink-0 ${
-                    listening
-                      ? "bg-rose-500/60 border-rose-300 text-white animate-pulse"
-                      : "bg-cyan-500/25 border-cyan-300/50 hover:bg-cyan-500/45 text-cyan-200"
-                  }`}
-                >
-                  <Mic size={18} />
-                </button>
-
-                {/* Real-time Dynamic Audio Visualizer Waves */}
+          ) : (
+            /* CASE B: Conversation Stream */
+            <div className="flex-1 max-w-3xl w-full mx-auto space-y-4 pb-6 overflow-y-auto">
+              {messages.map((msg) => (
                 <div
-                  title="Live Audio Level Visualizer"
-                  className="flex items-center gap-0.5 h-10 sm:h-11 px-2 rounded-2xl bg-white/5 border border-cyan-300/30 shrink-0"
+                  key={msg.id}
+                  className={`flex flex-col ${
+                    msg.role === "user" ? "items-end" : "items-start"
+                  } space-y-1`}
                 >
-                  {[0.4, 0.7, 1.2, 0.9, 1.1, 0.6, 0.8].map((mult, idx) => {
-                    const active = listening || speaking;
-                    const normLevel = audioLevel > 1 ? audioLevel / 100 : audioLevel;
-                    const calculatedHeight = active
-                      ? Math.min(26, Math.max(4, Math.round(normLevel * 26 * mult + (speaking ? Math.sin(idx + Date.now() / 200) * 8 + 6 : 4))))
-                      : 4;
-                    return (
-                      <span
-                        key={idx}
-                        className={`w-1 rounded-full transition-all duration-75 ${
-                          speaking
-                            ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]"
-                            : listening
-                            ? "bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.6)]"
-                            : "bg-cyan-500/30"
-                        }`}
-                        style={{ height: `${calculatedHeight}px` }}
-                      />
-                    );
-                  })}
+                  <div
+                    className={`p-4 rounded-3xl text-xs sm:text-sm leading-relaxed max-w-[85%] select-text backdrop-blur-xl ${
+                      msg.role === "user"
+                        ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-50 shadow-md"
+                        : "bg-slate-900/70 border border-white/15 text-slate-100 shadow-lg"
+                    }`}
+                  >
+                    {msg.role === "assistant" && (
+                      <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-white/10">
+                        <span className="text-cyan-400 font-extrabold text-xs">✦ Angel AI</span>
+                        {msg.actionExecuted && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-[10px] font-bold text-emerald-300">
+                            {msg.actionExecuted}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <p className="whitespace-pre-wrap">{msg.text || (isProcessing ? "Thinking..." : "")}</p>
+
+                    {/* Assistant Message Actions */}
+                    {msg.role === "assistant" && msg.text && (
+                      <div className="flex items-center gap-2 mt-2 pt-1 border-t border-white/10 text-slate-400 text-xs">
+                        <button
+                          onClick={() =>
+                            voiceRef.current?.speak(
+                              msg.text,
+                              () => setSpeaking(true),
+                              () => setSpeaking(false)
+                            )
+                          }
+                          title="Speak reply"
+                          className="p-1 rounded hover:text-cyan-300 transition"
+                        >
+                          <Volume2 size={13} />
+                        </button>
+                        <button
+                          onClick={() => handleCopyText(msg.id, msg.text)}
+                          title="Copy text"
+                          className="p-1 rounded hover:text-cyan-300 transition"
+                        >
+                          {copiedId === msg.id ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-mono px-2">{msg.timestamp}</span>
+                </div>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+
+          {/* 4. MULTI-FEATURED TRANSLUCENT PROMPT COMPOSER */}
+          <div className="w-full max-w-3xl mx-auto mt-auto pt-2">
+            <div className="rounded-3xl bg-slate-900/60 border border-white/15 backdrop-blur-2xl shadow-[0_0_40px_rgba(0,240,255,0.12)] p-2.5 flex flex-col gap-2 relative">
+              {/* TOP ROW: Plus Menu + Tools + Text Input + Model + Mic + Send */}
+              <div className="flex items-center gap-2">
+                {/* Plus Menu Button */}
+                <div className="relative">
+                  <button
+                    onClick={() => {
+                      setShowPlusMenu(!showPlusMenu);
+                      setShowMoreUploads(false);
+                      setShowToolsDropdown(false);
+                      setShowModelDropdown(false);
+                    }}
+                    title="Add attachments or media"
+                    className="p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white transition"
+                  >
+                    <Plus size={16} />
+                  </button>
+
+                  {/* Left Plus Popover Menu */}
+                  {showPlusMenu && (
+                    <div className="absolute bottom-12 left-0 w-52 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-1 z-50 text-xs">
+                      <button
+                        onClick={() => {
+                          fileInputRef.current?.click();
+                          setShowPlusMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2.5 text-slate-200"
+                      >
+                        <Upload size={14} className="text-cyan-400" />
+                        <span>Upload files</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          handleSendMessage("Sync and attach active cloud drive context.");
+                          setShowPlusMenu(false);
+                        }}
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2.5 text-slate-200"
+                      >
+                        <HardDrive size={14} className="text-sky-400" />
+                        <span>Add more drive</span>
+                      </button>
+
+                      {/* More Uploads Expandable Submenu */}
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowMoreUploads(!showMoreUploads)}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/10 flex items-center justify-between text-slate-200"
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <Sparkles size={14} className="text-amber-400" /> More uploads
+                          </span>
+                          <ChevronRight size={13} className="text-slate-400" />
+                        </button>
+
+                        {showMoreUploads && (
+                          <div className="absolute left-full bottom-0 ml-1.5 w-44 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
+                            {[
+                              { label: "Google Photos", icon: Image },
+                              { label: "Avatar", icon: User },
+                              { label: "Notebook", icon: BookOpen },
+                              { label: "Import code", icon: Code },
+                              { label: "Create image", icon: Sparkles },
+                              { label: "Create video", icon: Video },
+                              { label: "Create music", icon: Music },
+                              { label: "Canvas", icon: Layout },
+                            ].map((item, idx) => {
+                              const ItemIcon = item.icon;
+                              return (
+                                <button
+                                  key={idx}
+                                  onClick={() => {
+                                    handleSendMessage(`Open ${item.label} workspace.`);
+                                    setShowPlusMenu(false);
+                                    setShowMoreUploads(false);
+                                  }}
+                                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-white/10 flex items-center gap-2 text-slate-300 hover:text-white"
+                                >
+                                  <ItemIcon size={13} className="text-slate-400" />
+                                  <span>{item.label}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {/* Screen Vision Quick Trigger */}
-                <button
-                  onClick={handleScreenVision}
-                  title="Screen Vision: Analyze Current Screen in RAM"
-                  className="p-3 sm:p-3.5 rounded-2xl bg-cyan-500/25 border border-cyan-300/50 hover:bg-cyan-500/45 text-cyan-200 transition flex items-center justify-center text-xs font-bold shrink-0 gap-1"
-                >
-                  <Eye size={18} />
-                  <span className="hidden md:inline">Vision</span>
-                </button>
-
-                {/* WAV / MP3 Voice File Trigger */}
-                <label
-                  title="Upload .WAV or .MP3 Voice Command"
-                  className="p-3 sm:p-3.5 rounded-2xl bg-indigo-500/25 border border-indigo-300/50 hover:bg-indigo-500/45 text-indigo-200 cursor-pointer transition flex items-center justify-center text-xs font-bold shrink-0"
-                >
-                  WAV
-                  <input
-                    type="file"
-                    accept=".wav,.mp3,audio/wav,audio/mpeg"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) voiceRef.current?.processAudioFile(file);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-
+                {/* Hidden File Picker Input */}
                 <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = e.target.files;
+                    if (files && files.length > 0) {
+                      handleSendMessage(`Attached file: ${files[0].name}`);
+                    }
+                    e.target.value = "";
+                  }}
+                />
+
+                {/* Tools Dropdown Button */}
+                <div className="relative">
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(!showToolsDropdown);
+                      setShowPlusMenu(false);
+                      setShowModelDropdown(false);
+                    }}
+                    className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 flex items-center gap-1 transition"
+                  >
+                    <span>{selectedTool}</span>
+                    <ChevronDown size={12} className="text-slate-400" />
+                  </button>
+
+                  {showToolsDropdown && (
+                    <div className="absolute bottom-12 left-0 w-48 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
+                      {[
+                        { label: "Deep search", icon: Search },
+                        { label: "Guided learning", icon: GraduationCap },
+                        { label: "Personal intelligent", icon: Sparkles },
+                      ].map((tool, idx) => {
+                        const ToolIcon = tool.icon;
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              setSelectedTool(tool.label);
+                              setShowToolsDropdown(false);
+                            }}
+                            className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2 ${
+                              selectedTool === tool.label ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
+                            }`}
+                          >
+                            <ToolIcon size={14} />
+                            <span>{tool.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Main Input Field */}
+                <input
+                  type="text"
+                  placeholder="Ask Gemini"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      const cmd = input;
-                      setInput("");
-                      handleCommand(cmd);
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
                     }
                   }}
-                  placeholder="Speak, upload audio, vision, or type..."
-                  className="flex-1 min-w-[140px] bg-white/10 border border-cyan-300/40 rounded-2xl px-3.5 py-3 text-xs sm:text-sm text-white placeholder-slate-300 outline-none focus:border-cyan-300"
+                  className="flex-1 bg-transparent border-0 px-2 text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none"
                 />
 
+                {/* Model Version Selector */}
+                <div className="relative hidden md:block">
+                  <button
+                    onClick={() => {
+                      setShowModelDropdown(!showModelDropdown);
+                      setShowPlusMenu(false);
+                      setShowToolsDropdown(false);
+                    }}
+                    className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono text-slate-300 flex items-center gap-1 transition"
+                  >
+                    <span className="truncate max-w-[120px]">{selectedModel}</span>
+                    <ChevronDown size={11} className="text-slate-400" />
+                  </button>
+
+                  {showModelDropdown && (
+                    <div className="absolute bottom-12 right-0 w-48 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
+                      {["Auto • Gemini 3.5", "Gemini 3.5 Flash", "Gemini 3.5 Flash-Lite"].map((m, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            setSelectedModel(m);
+                            setShowModelDropdown(false);
+                          }}
+                          className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 text-xs ${
+                            selectedModel === m ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
+                          }`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Screen Vision Quick Button */}
                 <button
-                  onClick={() => {
-                    const cmd = input;
-                    setInput("");
-                    handleCommand(cmd);
-                  }}
-                  className="px-4 py-3 sm:px-5 sm:py-3.5 rounded-2xl bg-cyan-500/35 border border-cyan-300/60 hover:bg-cyan-500/55 text-white text-xs sm:text-sm font-bold flex items-center gap-1.5 shrink-0 transition"
+                  onClick={handleScreenVision}
+                  title="Analyze current screen in RAM"
+                  className="p-2 rounded-full hover:bg-white/10 text-slate-400 hover:text-cyan-300 transition"
                 >
-                  <Send size={16} /> Send
+                  <Eye size={17} />
                 </button>
+
+                {/* Click-to-Toggle Microphone Button */}
+                <button
+                  onClick={handleToggleMicrophone}
+                  style={listening ? { transform: `scale(${1 + Math.min(0.25, audioLevel / 400)})` } : undefined}
+                  title={listening ? "Click to stop recording & send" : "Click to start recording voice command"}
+                  className={`p-2.5 rounded-full border transition flex items-center justify-center shrink-0 ${
+                    listening
+                      ? "bg-rose-500/80 border-rose-300 text-white animate-pulse shadow-[0_0_15px_rgba(244,63,94,0.6)]"
+                      : "bg-white/10 border-white/10 hover:bg-white/20 text-slate-200"
+                  }`}
+                >
+                  <Mic size={16} />
+                </button>
+
+                {/* Send Button */}
+                <button
+                  onClick={() => handleSendMessage()}
+                  disabled={!input.trim() || isProcessing}
+                  title="Send message (Enter)"
+                  className="p-2.5 rounded-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-30 disabled:hover:bg-cyan-500 text-slate-950 transition flex items-center justify-center shrink-0 shadow-md shadow-cyan-500/30"
+                >
+                  <Send size={15} />
+                </button>
+              </div>
+
+              {/* BOTTOM ROW: Mode Switcher (Chat | Task) */}
+              <div className="flex items-center justify-between pt-1 border-t border-white/10 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setWorkspaceMode("chat")}
+                    className={`px-3 py-1 rounded-full font-bold transition ${
+                      workspaceMode === "chat"
+                        ? "bg-cyan-500/25 border border-cyan-400/60 text-cyan-200 shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    onClick={() => setWorkspaceMode("task")}
+                    className={`px-3 py-1 rounded-full font-bold transition flex items-center gap-1.5 ${
+                      workspaceMode === "task"
+                        ? "bg-emerald-500/25 border border-emerald-400/60 text-emerald-200 shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <span>Task</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  </button>
+                </div>
+
+                <div className="text-[11px] text-slate-400 font-mono hidden sm:inline">
+                  {workspaceMode === "task"
+                    ? "OS Automation Reflexes Active (Rust CREATE_NO_WINDOW)"
+                    : "Conversational Multimodal AI"}
+                </div>
               </div>
             </div>
           </div>
-        )}
+        </main>
       </div>
+
+      {/* Settings Drawer Modal */}
+      {showSettings && (
+        <SettingsDrawer
+          onClose={() => setShowSettings(false)}
+          onSyncCloud={() => brain.syncWithSupabase()}
+          onTestVoice={() =>
+            voiceRef.current?.speak(
+              "Hello Raja, Angel neural voice system is operational.",
+              () => setSpeaking(true),
+              () => setSpeaking(false)
+            )
+          }
+        />
+      )}
+
+      {/* Get App Companion Modal */}
+      {showGetAppModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
+          <div className="w-full max-w-md rounded-3xl bg-slate-900/90 border border-cyan-400/30 p-6 shadow-2xl text-white space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-base font-extrabold text-cyan-300">
+                <Smartphone size={20} />
+                <span>Angel AI Companion Ecosystem</span>
+              </div>
+              <button
+                onClick={() => setShowGetAppModal(false)}
+                className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
+              <div className="p-3 rounded-2xl bg-white/5 border border-white/10 space-y-1">
+                <div className="font-bold text-white flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span>Windows 11 Sovereign Desktop</span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Version 2.0.0 Standalone Executable (~4.8 MB) with native Rust backend and System Tray integration.
+                </p>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-white/5 border border-white/10 space-y-1">
+                <div className="font-bold text-white flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                  <span>Android Companion App</span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Real-time command relay syncing via Supabase table <code className="text-cyan-300">angel_device_relay</code>. Dispatches voice commands remotely to this desktop.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowGetAppModal(false)}
+              className="w-full py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/30 transition"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
