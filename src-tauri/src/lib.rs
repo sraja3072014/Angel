@@ -13,7 +13,7 @@ use sysinfo::{Pid, System};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 #[cfg(target_os = "windows")]
@@ -333,6 +333,37 @@ fn set_auto_start(enable: bool) -> String {
     }
 }
 
+#[tauri::command]
+fn open_security_suite(app: tauri::AppHandle, initial_tab: Option<String>) -> Result<(), String> {
+    let tab = initial_tab.unwrap_or_else(|| "antivirus".to_string());
+    if let Some(window) = app.get_webview_window("security-suite") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = window.emit("security-suite-switch-tab", &tab);
+        return Ok(());
+    }
+
+    let url_str = format!("index.html?window=security&tab={}", tab);
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        "security-suite",
+        WebviewUrl::App(url_str.into()),
+    )
+    .title("Project Angel — K7 Security & OS Doctor Suite")
+    .inner_size(960.0, 660.0)
+    .min_inner_size(840.0, 560.0)
+    .transparent(true)
+    .decorations(false)
+    .resizable(true)
+    .center();
+
+    let window = builder.build().map_err(|e| format!("Failed to create window: {}", e))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -414,15 +445,18 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Minimize to System Tray instead of terminating the background sentinels
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "main" {
+                    // Minimize to System Tray instead of terminating the background sentinels
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
             get_angel_ram_mb,
             execute_os_reflex,
             open_system_target,
+            open_security_suite,
             set_auto_start,
             voice_bridge::offline_speech_to_text,
             voice_bridge::speak_offline_tts,
@@ -440,23 +474,34 @@ pub fn run() {
             scheduler::add_scheduled_task,
             scheduler::delete_scheduled_task,
             aegis_av::aegis_scan_system,
+            aegis_av::run_aegis_quick_scan,
+            aegis_av::run_aegis_deep_scan,
+            aegis_av::scan_removable_drives,
             aegis_av::quarantine_file,
             aegis_av::aegis_quarantine_file,
             aegis_av::aegis_restore_file,
+            aegis_av::restore_quarantined_file,
             aegis_av::aegis_list_quarantine,
+            aegis_av::list_quarantined_files,
+            aegis_av::delete_quarantined_file,
             smart_firewall::firewall_get_status,
+            smart_firewall::get_network_status,
             smart_firewall::firewall_toggle_lockdown,
+            smart_firewall::set_firewall_lockdown,
             smart_firewall::firewall_block_ip,
             smart_firewall::firewall_get_connections,
             smart_firewall::get_active_network_apps,
             smart_firewall::block_network_app,
             smart_firewall::block_app_internet,
             os_doctor::os_doctor_diagnose,
+            os_doctor::scan_windows_errors,
             os_doctor::os_doctor_heal_audio,
             os_doctor::os_doctor_heal_network,
             os_doctor::os_doctor_clean_temp,
+            os_doctor::heal_windows_services,
             os_doctor::os_doctor_create_restore_point,
             os_doctor::os_doctor_repair_system,
+            os_doctor::run_deep_os_repair,
             plugin_forge::plugin_forge_list,
             plugin_forge::plugin_forge_save,
             plugin_forge::forge_new_skill,

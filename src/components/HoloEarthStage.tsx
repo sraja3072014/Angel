@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+﻿import { useEffect, useRef } from "react";
 import * as THREE from "three";
 
 interface HoloEarthProps {
@@ -26,7 +26,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
 
     let { width, height } = getBoxSize();
 
-    // 1. Scene & Camera (கச்சிதமாகப் பொருந்த Camera distance சற்று அதிகரிக்கப்பட்டுள்ளது)
+    // 1. Scene & Camera (à®•à®šà¯à®šà®¿à®¤à®®à®¾à®•à®ªà¯ à®ªà¯Šà®°à¯à®¨à¯à®¤ Camera distance à®šà®±à¯à®±à¯ à®…à®¤à®¿à®•à®°à®¿à®•à¯à®•à®ªà¯à®ªà®Ÿà¯à®Ÿà¯à®³à¯à®³à®¤à¯)
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
     camera.position.set(0, 0.1, 4.75);
@@ -92,22 +92,41 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     const earthMesh = new THREE.Mesh(earthGeo, earthMat);
     earthGroup.add(earthMesh);
 
-    // B. Moving 3D Cloud Layer
-    const cloudGeo = new THREE.SphereGeometry(1.142, 64, 64);
-    const cloudMat = new THREE.MeshPhongMaterial({
-      transparent: true,
-      opacity: 0.78,
-      depthWrite: false,
-    });
+    // B. Moon (Lunar Orbit) - ~384,400 km radius orbit
+    const moonRef = useRef(null);
+    const moonGeo = new THREE.SphereGeometry(0.12, 32, 32);
+    const moonMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.8 });
+    const moonMesh = new THREE.Mesh(moonGeo, moonMat);
+    moonMesh.position.set(3.2 + Math.cos(moonOrbitPhase.current) * 1.8, 0.7 + Math.sin(moonOrbitPhase.current) * 1.0, 0);
+    moonRef.current = moonMesh;
+    scene.add(moonMesh);
 
-    loader.load("/earth_clouds.png", (cloudTex) => {
-      cloudMat.map = cloudTex;
-      cloudMat.needsUpdate = true;
-    });
+    // C. ISS (International Space Station) - ~400 km altitude orbit
+    const issBodyRef = useRef(null);
+    // Orbital tracking refs for animation
+    const moonOrbitPhase = useRef(0);
+    const isonOrbitAngle = useRef(0);
+    const issBody = new THREE.Group();
+    const issMainGeo = new THREE.BoxGeometry(0.08, 0.03, 0.04);
+    const issMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8 });
+    const issMainMesh = new THREE.Mesh(issMainGeo, issMat);
+    issBody.add(issMainMesh);
 
-    const cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
-    earthGroup.add(cloudMesh);
+    const issPanelGeo = new THREE.BoxGeometry(0.16, 0.01, 0.04);
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 0.5 });
+    const panelLeft = new THREE.Mesh(issPanelGeo, panelMat);
+    panelLeft.position.set(-0.1, 0, 0);
+    issBody.add(panelLeft);
 
+    const panelRight = new THREE.Mesh(issPanelGeo, panelMat);
+    panelRight.position.set(0.1, 0, 0);
+    issBody.add(panelRight);
+
+    issBody.position.set(2.4 + Math.cos(isonOrbitAngle.current * 5) * 1.5, 0.5 + Math.sin(isonOrbitAngle.current * 5) * 1.0, 0);
+    issBodyRef.current = issBody;
+    scene.add(issBody);
+
+  const moonMesh = new THREE.Mesh(moonGeo, moonMat);
     // C. Holographic Grid Overlay
     const holoGridGeo = new THREE.SphereGeometry(1.162, 28, 28);
     const holoGridMat = new THREE.MeshBasicMaterial({
@@ -119,14 +138,16 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     const holoGrid = new THREE.Mesh(holoGridGeo, holoGridMat);
     earthGroup.add(holoGrid);
 
-    // 4. Outer Satellite Orbit Rings (பாக்ஸுக்குள் கச்சிதமாக அடங்கும் அளவு)
+    // 4. Outer Satellite Orbit Rings (à®ªà®¾à®•à¯à®¸à¯à®•à¯à®•à¯à®³à¯ à®•à®šà¯à®šà®¿à®¤à®®à®¾à®• à®…à®Ÿà®™à¯à®•à¯à®®à¯ à®…à®³à®µà¯)
     const ring1Geo = new THREE.TorusGeometry(1.45, 0.011, 16, 120);
     const ring1Mat = new THREE.MeshBasicMaterial({
       color: 0x00f0ff,
       transparent: true,
       opacity: 0.65,
     });
+    const orbitRing1Ref = useRef(null);
     const orbitRing1 = new THREE.Mesh(ring1Geo, ring1Mat);
+    orbitRing1Ref.current = orbitRing1;
     orbitRing1.rotation.x = 1.25;
     orbitRing1.rotation.y = 0.2;
     scene.add(orbitRing1);
@@ -137,7 +158,9 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
       transparent: true,
       opacity: 0.35,
     });
+    const orbitRing2Ref = useRef(null);
     const orbitRing2 = new THREE.Mesh(ring2Geo, ring2Mat);
+    orbitRing2Ref.current = orbitRing2;
     orbitRing2.rotation.x = 1.45;
     orbitRing2.rotation.y = -0.35;
     scene.add(orbitRing2);
@@ -243,11 +266,16 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
           }`}
         />
         {speaking
-          ? "ANGEL AI • SPEAKING"
+          ? "ANGEL AI â€¢ SPEAKING"
           : listening
-          ? "ANGEL AI • LISTENING"
-          : "GLOBAL HOLOGRAM • ONLINE"}
+          ? "ANGEL AI â€¢ LISTENING"
+          : "GLOBAL HOLOGRAM â€¢ ONLINE"}
       </div>
     </div>
   );
 }
+
+
+
+
+

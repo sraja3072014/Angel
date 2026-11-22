@@ -199,6 +199,16 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const handleOpenSecuritySuite = async (tab: string) => {
+    try {
+      await invoke("open_security_suite", { initialTab: tab });
+    } catch {
+      if (tab === "antivirus") handleCommand("system scan");
+      else if (tab === "firewall") handleCommand("firewall status");
+      else if (tab === "doctor") handleCommand("windows error");
+    }
+  };
+
   const handleToggleWake = () => {
     const active = voiceRef.current?.toggleWakeWord();
     setWakeEnabled(!!active);
@@ -351,7 +361,7 @@ export default function App() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-1 gap-2">
                   <button
-                    onClick={() => handleCommand("system scan")}
+                    onClick={() => handleOpenSecuritySuite("antivirus")}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-emerald-500/15 border border-emerald-400/40 hover:bg-emerald-500/30 text-xs sm:text-sm font-bold text-left flex items-center gap-2.5 transition"
                   >
                     <Shield size={16} className="text-emerald-400 shrink-0" />
@@ -359,7 +369,7 @@ export default function App() {
                   </button>
 
                   <button
-                    onClick={() => handleCommand("firewall status")}
+                    onClick={() => handleOpenSecuritySuite("firewall")}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-sky-500/15 border border-sky-400/40 hover:bg-sky-500/30 text-xs sm:text-sm font-bold text-left flex items-center gap-2.5 transition"
                   >
                     <Activity size={16} className="text-sky-400 shrink-0" />
@@ -367,7 +377,7 @@ export default function App() {
                   </button>
 
                   <button
-                    onClick={() => handleCommand("windows error")}
+                    onClick={() => handleOpenSecuritySuite("doctor")}
                     className="w-full px-3.5 py-2.5 rounded-xl bg-amber-500/15 border border-amber-400/40 hover:bg-amber-500/30 text-xs sm:text-sm font-bold text-left flex items-center gap-2.5 transition"
                   >
                     <Stethoscope size={16} className="text-amber-300 shrink-0" />

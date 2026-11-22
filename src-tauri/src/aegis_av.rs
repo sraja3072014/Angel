@@ -331,6 +331,227 @@ pub fn aegis_list_quarantine() -> Vec<ThreatItem> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuarantinedFileInfo {
+    pub id: String,
+    pub original_name: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub file_size: u64,
+    pub quarantined_at: String,
+    pub threat_type: String,
+    pub sha256: String,
+}
+
+#[tauri::command]
+pub fn list_quarantined_files() -> Vec<QuarantinedFileInfo> {
+    let q_dir = get_quarantine_dir();
+    let manifest = read_quarantine_manifest();
+    let mut results = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&q_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                if name == "quarantine_manifest.json" {
+                    continue;
+                }
+                let meta = entry.metadata().ok();
+                let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let time_str = meta.and_then(|m| m.created().or_else(|_| m.modified()).ok())
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs().to_string())
+                    .unwrap_or_else(chrono_timestamp);
+
+                // Match in manifest if available
+                let matched = manifest.iter().find(|m| m.file_path == path.to_string_lossy() || m.file_name == name);
+
+                let id = matched.map(|m| m.id.clone()).unwrap_or_else(|| format!("Q_{}", name));
+                let original_name = matched.map(|m| m.file_name.clone()).unwrap_or_else(|| {
+                    if let Some(pos) = name.rfind('_') {
+                        name[..pos].to_string()
+                    } else {
+                        name.clone()
+                    }
+                });
+                let threat_type = matched.map(|m| m.threat_type.clone()).unwrap_or_else(|| "Quarantined Suspicious File".to_string());
+                let sha256 = matched.map(|m| m.sha256.clone()).unwrap_or_else(|| compute_file_sha256(&path.to_string_lossy()));
+
+                results.push(QuarantinedFileInfo {
+                    id,
+                    original_name,
+                    file_name: name,
+                    file_path: path.to_string_lossy().to_string(),
+                    file_size,
+                    quarantined_at: time_str,
+                    threat_type,
+                    sha256,
+                });
+            }
+        }
+    }
+
+    results
+}
+
+#[tauri::command]
+pub fn delete_quarantined_file(file_name: String) -> Result<String, String> {
+    let q_dir = get_quarantine_dir();
+    let manifest = read_quarantine_manifest();
+
+    let mut target_path = None;
+    for item in &manifest {
+        if item.file_name == file_name || item.id == file_name || item.file_path == file_name {
+            target_path = Some(PathBuf::from(&item.file_path));
+            break;
+        }
+    }
+
+    if target_path.is_none() {
+        let direct_path = q_dir.join(&file_name);
+        if direct_path.exists() {
+            target_path = Some(direct_path);
+        }
+    }
+
+    if let Some(path) = target_path {
+        let path_str = path.to_string_lossy().to_string();
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
+        let updated: Vec<ThreatItem> = manifest
+            .into_iter()
+            .filter(|m| m.file_path != path_str && m.file_name != file_name && m.id != file_name)
+            .collect();
+        save_quarantine_manifest(&updated);
+        Ok(format!("Threat purged permanently from Quarantine Vault: {}", file_name))
+    } else {
+        let updated: Vec<ThreatItem> = manifest
+            .into_iter()
+            .filter(|m| m.file_name != file_name && m.id != file_name && m.file_path != file_name)
+            .collect();
+        save_quarantine_manifest(&updated);
+        Ok(format!("Cleaned quarantine entry for: {}", file_name))
+    }
+}
+
+#[tauri::command]
+pub fn restore_quarantined_file(file_name: String, target_path: Option<String>) -> Result<String, String> {
+    let q_dir = get_quarantine_dir();
+    let manifest = read_quarantine_manifest();
+
+    let matched = manifest.iter().find(|m| m.file_name == file_name || m.id == file_name || m.file_path == file_name);
+
+    let src_path = if let Some(m) = matched {
+        PathBuf::from(&m.file_path)
+    } else {
+        q_dir.join(&file_name)
+    };
+
+    if !src_path.exists() {
+        return Err("Quarantined file not found on disk.".to_string());
+    }
+
+    let dest_path = if let Some(custom) = target_path {
+        PathBuf::from(custom)
+    } else {
+        let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string());
+        let desktop = PathBuf::from(user_profile).join("Desktop");
+        let orig_name = matched.map(|m| m.file_name.as_str()).unwrap_or(file_name.as_str());
+        desktop.join(orig_name)
+    };
+
+    let _ = fs::copy(&src_path, &dest_path).map_err(|e| format!("Restore copy failed: {}", e))?;
+    let _ = fs::remove_file(&src_path);
+
+    let updated: Vec<ThreatItem> = manifest
+        .into_iter()
+        .filter(|m| m.file_path != src_path.to_string_lossy() && m.file_name != file_name && m.id != file_name)
+        .collect();
+    save_quarantine_manifest(&updated);
+
+    Ok(format!("File successfully restored to: {}", dest_path.to_string_lossy()))
+}
+
+#[tauri::command]
+pub fn run_aegis_quick_scan() -> ScanResult {
+    scan_target_folders()
+}
+
+#[tauri::command]
+pub fn run_aegis_deep_scan() -> ScanResult {
+    let start = SystemTime::now();
+    let mut files_scanned = 0;
+    let mut threats = Vec::new();
+
+    let base_scan = scan_target_folders();
+    files_scanned += base_scan.files_scanned;
+    threats.extend(base_scan.threats_found);
+
+    let app_data = std::env::var("APPDATA").unwrap_or_default();
+    if !app_data.is_empty() {
+        let startup_dir = PathBuf::from(&app_data).join("Microsoft\\Windows\\Start Menu\\Programs\\Startup");
+        if startup_dir.exists() {
+            if let Ok(entries) = fs::read_dir(startup_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        files_scanned += 1;
+                        if let Some(t) = inspect_file_heuristics(&path) {
+                            threats.push(t);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let duration = SystemTime::now().duration_since(start).unwrap_or_default().as_millis();
+    ScanResult {
+        files_scanned,
+        threats_found: threats,
+        scan_duration_ms: duration,
+    }
+}
+
+#[tauri::command]
+pub fn scan_removable_drives() -> Vec<ThreatItem> {
+    let mut threats = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        for drive_letter in b'D'..=b'Z' {
+            let root_str = format!("{}:\\", drive_letter as char);
+            let root_path = Path::new(&root_str);
+            if root_path.exists() {
+                if let Ok(entries) = fs::read_dir(root_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_file() {
+                            let fname = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                            if fname == "autorun.inf" {
+                                threats.push(ThreatItem {
+                                    id: format!("USB_AUTORUN_{}", chrono_timestamp()),
+                                    file_name: fname,
+                                    file_path: path.to_string_lossy().to_string(),
+                                    threat_type: "Suspicious Autorun.inf on Removable Drive".to_string(),
+                                    sha256: compute_file_sha256(&path.to_string_lossy()),
+                                    detected_at: chrono_timestamp(),
+                                    severity: "HIGH".to_string(),
+                                    status: "DETECTED".to_string(),
+                                });
+                            } else if let Some(t) = inspect_file_heuristics(&path) {
+                                threats.push(t);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    threats
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreatAlert {
     pub file_name: String,
     pub file_path: String,

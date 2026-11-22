@@ -283,3 +283,13 @@ pub fn block_network_app(exe_path: String, rule_name: Option<String>) -> Result<
         Ok(format!("Network blocked for {}", exe_path))
     }
 }
+
+#[tauri::command]
+pub fn get_network_status() -> FirewallStatus {
+    firewall_get_status()
+}
+
+#[tauri::command]
+pub fn set_firewall_lockdown(enable: bool) -> Result<String, String> {
+    firewall_toggle_lockdown(enable)
+}

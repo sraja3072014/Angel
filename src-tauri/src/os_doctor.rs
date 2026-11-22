@@ -234,13 +234,38 @@ pub fn os_doctor_repair_system() -> Result<String, String> {
             .map_err(|e| format!("SFC repair error: {}", e))?;
 
         if output.status.success() {
-            Ok("SFC System Scan நிறைவடைந்தது. சிதைந்த கோப்புகள் சரிசெய்யப்பட்டன.".to_string())
+            Ok("SFC System Scan completed successfully. Integrity verified.".to_string())
         } else {
-            Err("SFC Scan இயக்க இயலவில்லை.".to_string())
+            Err("Unable to execute SFC Scan. Administrator elevation required.".to_string())
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
         Ok("System repair completed.".to_string())
     }
+}
+
+#[tauri::command]
+pub fn scan_windows_errors() -> DiagnosticReport {
+    os_doctor_diagnose()
+}
+
+#[tauri::command]
+pub fn heal_windows_services() -> Result<String, String> {
+    let mut results = Vec::new();
+    if let Ok(msg) = os_doctor_heal_audio() {
+        results.push(msg);
+    }
+    if let Ok(msg) = os_doctor_heal_network() {
+        results.push(msg);
+    }
+    if let Ok(msg) = os_doctor_clean_temp() {
+        results.push(msg);
+    }
+    Ok(format!("OS Doctor Auto-Heal: {}", results.join(" • ")))
+}
+
+#[tauri::command]
+pub fn run_deep_os_repair() -> Result<String, String> {
+    os_doctor_repair_system()
 }
