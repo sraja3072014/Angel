@@ -90,8 +90,20 @@ export default function App() {
   }, []);
 
   // AI Model Ladder Selector
-  const [selectedModel, setSelectedModel] = useState<string>("Auto");
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return localStorage.getItem("angel_primary_model") || "Auto";
+  });
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+
+  useEffect(() => {
+    const handleModelChange = (e: any) => {
+      if (e.detail?.model) {
+        setSelectedModel(e.detail.model);
+      }
+    };
+    window.addEventListener("angel-model-changed", handleModelChange);
+    return () => window.removeEventListener("angel-model-changed", handleModelChange);
+  }, []);
 
   // Tools Selector
   const [selectedTool, setSelectedTool] = useState<string>("Tools");
@@ -714,19 +726,34 @@ export default function App() {
                   </button>
 
                   {showModelDropdown && (
-                    <div className="absolute bottom-12 right-0 w-48 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
-                      {["Auto", "Gemini 3.5 Flash", "Gemini 3.5 Flash-Lite"].map((m, idx) => (
+                    <div className="absolute bottom-12 right-0 w-56 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs max-h-72 overflow-y-auto">
+                      {[
+                        { id: "Auto", label: "Auto Smart Router" },
+                        { id: "gemini", label: "Google Gemini 3.5" },
+                        { id: "groq", label: "Groq Llama 3.3 70B" },
+                        { id: "deepseek", label: "DeepSeek V3" },
+                        { id: "openai", label: "OpenAI GPT-4o" },
+                        { id: "anthropic", label: "Claude 3.7 Sonnet" },
+                        { id: "github", label: "GitHub Models (GPT-4o)" },
+                        { id: "openrouter", label: "Free LLM (OpenRouter)" },
+                        { id: "ollama", label: "Ollama (Offline Local)" },
+                        { id: "local_lmstudio", label: "Local LM Studio" },
+                      ].map((m) => (
                         <button
-                          key={idx}
+                          key={m.id}
                           onClick={() => {
-                            setSelectedModel(m);
+                            setSelectedModel(m.id);
+                            localStorage.setItem("angel_primary_model", m.id);
                             setShowModelDropdown(false);
                           }}
-                          className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 text-xs ${
-                            selectedModel === m ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
+                          className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 text-xs flex items-center justify-between ${
+                            selectedModel === m.id ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
                           }`}
                         >
-                          {m}
+                          <span className="truncate">{m.label}</span>
+                          {selectedModel === m.id && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+                          )}
                         </button>
                       ))}
                     </div>
