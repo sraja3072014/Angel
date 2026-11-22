@@ -298,6 +298,15 @@ export function MenuControlCenterWindow({
   };
 
   const handleTestProvider = async (provider: AIProviderConfig) => {
+    if (provider.id === "openrouter") {
+      const keys = extractKeysList(provider.apiKey);
+      if (keys.length === 0) {
+        const msg = "OpenRouter requires a free API key (sk-or-v1-...). Paste your key above.";
+        setTestResults((prev) => ({ ...prev, [provider.id]: { ok: false, message: msg } }));
+        showToast(msg);
+        return;
+      }
+    }
     setTestingId(provider.id);
     const result = await testProviderConnection(provider);
     setTestResults((prev) => ({ ...prev, [provider.id]: result }));
@@ -1378,13 +1387,15 @@ export function MenuControlCenterWindow({
                           }
                           placeholder={
                             activeProvider.id === "openrouter"
-                              ? "Optional OpenRouter API key (sk-or-v1-...)\nLeave blank for default free rate limits"
+                              ? "sk-or-v1-...\n(Paste your free OpenRouter API key here — one key per line)"
                               : "sk-...\nsk-...\n(Paste multiple keys here — one key per line)"
                           }
                           className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition"
                         />
                         <div className="text-[11px] text-slate-400">
-                          One key per line — rotated automatically to dodge rate limits.
+                          {activeProvider.id === "openrouter"
+                            ? "OpenRouter requires a free API key (sk-or-v1-...). One key per line — rotated automatically."
+                            : "One key per line — rotated automatically to dodge rate limits."}
                         </div>
                       </div>
                     )}

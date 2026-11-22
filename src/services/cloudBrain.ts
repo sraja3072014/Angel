@@ -174,12 +174,12 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
     availableModels: [
       "meta-llama/llama-3.3-70b-instruct:free",
-      "deepseek/deepseek-r1:free",
-      "google/gemini-2.0-flash-exp:free",
+      "google/gemma-2-9b-it:free",
+      "qwen/qwen-2.5-72b-instruct:free",
     ],
     enabled: true,
-    status: "ready",
-    description: "OpenRouter free-tier models — zero cost inference.",
+    status: "missing_key",
+    description: "OpenRouter free-tier models — zero cost inference with free API key.",
     consoleUrl: "https://openrouter.ai/keys",
     capabilities: ["≋ STREAMING", "🆓 ZERO COST", "</> CODE GEN"],
   },
@@ -257,6 +257,18 @@ export function loadAIProviders(): AIProviderConfig[] {
             defModel = "gemini-3.8-flash";
           }
           availModels = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
+        }
+
+        // Auto-migrate OpenRouter models to verified active free models
+        if (def.id === "openrouter") {
+          availModels = [
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemma-2-9b-it:free",
+            "qwen/qwen-2.5-72b-instruct:free",
+          ];
+          if (!availModels.includes(defModel)) {
+            defModel = "meta-llama/llama-3.3-70b-instruct:free";
+          }
         }
 
         merged.push({
@@ -410,7 +422,16 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
     }
 
-    if (!activeKey && provider.id !== "openrouter") {
+    if (provider.id === "openrouter") {
+      if (!activeKey || !activeKey.trim()) {
+        return {
+          ok: false,
+          message: "OpenRouter requires a free API key (sk-or-v1-...). Paste your key above.",
+        };
+      }
+    }
+
+    if (!activeKey && provider.id !== "local_lmstudio") {
       return { ok: false, message: "API key or token is required" };
     }
 
@@ -421,10 +442,11 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (activeKey) {
-      headers["Authorization"] = `Bearer ${activeKey}`;
+      headers["Authorization"] = `Bearer ${activeKey.trim()}`;
     }
     if (provider.id === "openrouter") {
-      headers["HTTP-Referer"] = "https://projectangel.ai";
+      headers["Authorization"] = `Bearer ${activeKey.trim()}`;
+      headers["HTTP-Referer"] = "https://angel-ai.local";
       headers["X-Title"] = "Angel AI";
     }
 
@@ -906,19 +928,27 @@ Never use destructive commands (rm, del, format).`;
       targetUrl = `${targetUrl.replace(/\/$/, "")}/chat/completions`;
     }
 
+    if (provider.id === "openrouter") {
+      const validKey = candidateKeys.find((k) => k && k.trim());
+      if (!validKey) {
+        throw new Error("OpenRouter requires a free API key (sk-or-v1-...). Paste your key above.");
+      }
+    }
+
     let lastErrorMsg = "";
 
     for (const key of candidateKeys) {
-      if (!key && provider.id !== "openrouter" && provider.id !== "local_lmstudio") {
+      if (!key && provider.id !== "local_lmstudio") {
         continue;
       }
 
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (key) {
-        headers["Authorization"] = `Bearer ${key}`;
+        headers["Authorization"] = `Bearer ${key.trim()}`;
       }
       if (provider.id === "openrouter") {
-        headers["HTTP-Referer"] = "https://projectangel.ai";
+        headers["Authorization"] = `Bearer ${key.trim()}`;
+        headers["HTTP-Referer"] = "https://angel-ai.local";
         headers["X-Title"] = "Angel AI";
       }
 
