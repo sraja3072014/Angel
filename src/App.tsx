@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Mic,
-  Settings,
   Shield,
   Send,
   X,
@@ -15,6 +14,7 @@ import {
   AlertTriangle,
   Lock,
   Eye,
+  Menu,
 } from "lucide-react";
 import "./App.css";
 import { CloudBrainService } from "./services/cloudBrain";
@@ -43,7 +43,7 @@ const brain = new CloudBrainService();
 export default function App() {
   const voiceRef = useRef<AngelVoiceEngine | null>(null);
 
-  const [ramMb, setRamMb] = useState<string>("28.0");
+  const [, setRamMb] = useState<string>("28.0");
   const [input, setInput] = useState("");
   const [reply, setReply] = useState("Welcome Raja! Project Angel V3 Global Command Center is online.");
   const [speaking, setSpeaking] = useState(false);
@@ -245,10 +245,7 @@ export default function App() {
         <div data-tauri-drag-region className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             <span className="text-base sm:text-lg font-extrabold tracking-widest text-cyan-300 drop-shadow">
-              ✦ PROJECT ANGEL V3
-            </span>
-            <span className="px-2.5 py-1 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-xs font-semibold text-cyan-200 flex items-center gap-1.5">
-              <Shield size={14} className="text-emerald-400" /> AI SHIELD • RAM: {ramMb} MB
+              ✦ ANGEL AI
             </span>
             <span className="hidden sm:flex px-3 py-1 rounded-full bg-white/5 border border-cyan-400/30 text-xs font-mono text-cyan-100 items-center gap-1.5">
               <Clock size={13} className="text-cyan-400" />
@@ -276,7 +273,7 @@ export default function App() {
               onClick={() => setShowSettings(!showSettings)}
               className="px-3.5 py-1.5 sm:py-2 rounded-xl bg-cyan-500/20 border border-cyan-300/40 hover:bg-cyan-500/35 text-cyan-100 text-xs font-bold flex items-center gap-1.5 transition"
             >
-              <Settings size={15} /> Settings
+              <Menu size={15} /> Menu
             </button>
 
             <button
