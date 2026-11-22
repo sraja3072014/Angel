@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { CloudSun, Wind, Droplets } from "lucide-react";
+import { CloudSun, Droplets } from "lucide-react";
 
 interface HoloEarthProps {
   speaking: boolean;
   listening: boolean;
 }
 
-interface WeatherInfo {
+interface WeatherData {
+  location: string;
   temperature: number;
   humidity: number;
-  windSpeed: number;
   condition: string;
-  location: string;
 }
 
 export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
@@ -20,59 +19,73 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef({ speaking, listening });
 
-  // Live Weather HUD state (Koduvai, TN, IN)
-  const [weather, setWeather] = useState<WeatherInfo>({
+  const [weather, setWeather] = useState<WeatherData>({
+    location: "Koduvai, IN",
     temperature: 29.0,
     humidity: 64,
-    windSpeed: 12.0,
-    condition: "Fair / Sunny",
-    location: "Koduvai, IN",
+    condition: "Fair",
   });
 
   useEffect(() => {
     stateRef.current = { speaking, listening };
   }, [speaking, listening]);
 
-  // Fetch Open-Meteo weather with fallback for Koduvai (lat=11.02, lon=77.31)
+  // Live Local Weather Overlay via Open-Meteo with Geolocation & Koduvai fallback
   useEffect(() => {
     let isMounted = true;
-    const fetchWeather = async () => {
+
+    const fetchWeather = async (lat: number, lon: number, locName: string) => {
       try {
-        const url =
-          "https://api.open-meteo.com/v1/forecast?latitude=11.02&longitude=77.31&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m";
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code`;
         const res = await fetch(url);
         if (res.ok) {
           const data = await res.json();
-          if (data.current && isMounted) {
+          if (data?.current && isMounted) {
             const code = data.current.weather_code ?? 0;
-            let cond = "Clear Sky";
+            let cond = "Clear";
             if (code >= 1 && code <= 3) cond = "Partly Cloudy";
             else if (code >= 45 && code <= 48) cond = "Foggy";
-            else if (code >= 51 && code <= 67) cond = "Rain Showers";
-            else if (code >= 80 && code <= 99) cond = "Thunderstorms";
+            else if (code >= 51 && code <= 67) cond = "Rain";
+            else if (code >= 80 && code <= 99) cond = "Storm";
 
             setWeather({
+              location: locName,
               temperature: Math.round(data.current.temperature_2m * 10) / 10,
               humidity: data.current.relative_humidity_2m ?? 64,
-              windSpeed: Math.round(data.current.wind_speed_10m * 10) / 10,
               condition: cond,
-              location: "Koduvai, IN",
             });
           }
         }
       } catch {
-        // Retain standard Koduvai fallback on network isolation
+        // Fallback already pre-set to Koduvai, IN
       }
     };
 
-    fetchWeather();
-    const weatherTimer = setInterval(fetchWeather, 10 * 60 * 1000); // 10 min
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          fetchWeather(pos.coords.latitude, pos.coords.longitude, "Local Weather");
+        },
+        () => {
+          fetchWeather(11.02, 77.31, "Koduvai, IN");
+        },
+        { timeout: 4000 }
+      );
+    } else {
+      fetchWeather(11.02, 77.31, "Koduvai, IN");
+    }
+
+    const interval = setInterval(() => {
+      fetchWeather(11.02, 77.31, "Koduvai, IN");
+    }, 10 * 60 * 1000);
+
     return () => {
       isMounted = false;
-      clearInterval(weatherTimer);
+      clearInterval(interval);
     };
   }, []);
 
+  // 3D Scene Initialization
   useEffect(() => {
     if (!mountRef.current || !containerRef.current) return;
 
@@ -84,10 +97,10 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
 
     let { width, height } = getBoxSize();
 
-    // 1. Scene & Camera
+    // 1. Scene, Camera (z = 4.9 for zero-clipping auto-fit), Renderer
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
-    camera.position.set(0, 0.1, 4.75);
+    camera.position.set(0, 0.1, 4.9);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
@@ -96,7 +109,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     mountRef.current.innerHTML = "";
     mountRef.current.appendChild(renderer.domElement);
 
-    // 2. Real-Time Solar Day/Night Lighting
+    // 2. Ambient + Real-Time Solar Directional Lighting (calculated from system current hour)
     const ambientLight = new THREE.AmbientLight(0x1e293b, 0.95);
     scene.add(ambientLight);
 
@@ -132,14 +145,14 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     rimLight.position.set(-4.0, -1.5, -2.5);
     scene.add(rimLight);
 
-    // 3. Earth Axial Tilt Group (23.5 deg = ~0.41 rad or 0.23 rad aesthetic)
+    // 3. Earth Tilt Group
     const earthGroup = new THREE.Group();
     earthGroup.rotation.z = 0.23;
     scene.add(earthGroup);
 
     const loader = new THREE.TextureLoader();
 
-    // A. Satellite Surface + Night City Lights + Specular Ocean
+    // A. Satellite Surface + Specular Oceans + Night City Lights
     const earthGeo = new THREE.SphereGeometry(1.12, 64, 64);
     const earthMat = new THREE.MeshPhongMaterial({
       color: 0xffffff,
@@ -174,7 +187,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     const earthMesh = new THREE.Mesh(earthGeo, earthMat);
     earthGroup.add(earthMesh);
 
-    // B. Moving 3D Cloud Layer
+    // B. Moving 3D Cloud Sphere
     const cloudGeo = new THREE.SphereGeometry(1.142, 64, 64);
     const cloudMat = new THREE.MeshPhongMaterial({
       transparent: true,
@@ -201,47 +214,69 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     const holoGrid = new THREE.Mesh(holoGridGeo, holoGridMat);
     earthGroup.add(holoGrid);
 
-    // 4. Orbiting 3D Moon
-    const moonGeo = new THREE.SphereGeometry(0.12, 32, 32);
+    // 4. Orbiting 3D Moon on Inclined Orbit
+    const moonGroup = new THREE.Group();
+    moonGroup.rotation.x = 0.35; // 20-deg lunar orbital inclination
+    scene.add(moonGroup);
+
+    const moonGeo = new THREE.SphereGeometry(0.24, 32, 32);
     const moonMat = new THREE.MeshStandardMaterial({
       color: 0xe2e8f0,
-      roughness: 0.85,
-      metalness: 0.1,
+      roughness: 0.88,
+      metalness: 0.05,
     });
     const moonMesh = new THREE.Mesh(moonGeo, moonMat);
-    moonMesh.position.set(2.4, 0.4, 0);
-    scene.add(moonMesh);
+    moonMesh.position.set(2.35, 0, 0);
+    moonGroup.add(moonMesh);
 
-    // 5. Procedural International Space Station (ISS) with Solar Wings
-    const issBody = new THREE.Group();
+    // 5. Procedural 3D ISS Group (Truss + Habitation + Twin Solar Wings + Blinking Cyan Beacon)
+    const issGroup = new THREE.Group();
+    issGroup.rotation.x = -0.45; // 51.6-deg ISS orbital inclination aesthetic
+    scene.add(issGroup);
 
-    // Central cylindrical/box module
-    const issMainGeo = new THREE.BoxGeometry(0.08, 0.03, 0.04);
-    const issMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.7 });
-    const issMainMesh = new THREE.Mesh(issMainGeo, issMat);
-    issBody.add(issMainMesh);
+    const issStation = new THREE.Group();
 
-    // Left & Right Solar Panels (Gold/Cyan Photo-Voltaic Wings)
-    const panelGeo = new THREE.BoxGeometry(0.18, 0.008, 0.045);
-    const panelMat = new THREE.MeshStandardMaterial({
+    // Central Habitation & Node
+    const habGeo = new THREE.BoxGeometry(0.07, 0.035, 0.035);
+    const habMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.75 });
+    const habMesh = new THREE.Mesh(habGeo, habMat);
+    issStation.add(habMesh);
+
+    // Integrated Truss Structure
+    const trussGeo = new THREE.CylinderGeometry(0.006, 0.006, 0.26, 8);
+    const trussMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.9 });
+    const trussMesh = new THREE.Mesh(trussGeo, trussMat);
+    trussMesh.rotation.z = Math.PI / 2;
+    issStation.add(trussMesh);
+
+    // Twin Solar Wings (Port & Starboard Photovoltaic Arrays)
+    const wingGeo = new THREE.BoxGeometry(0.12, 0.006, 0.045);
+    const wingMat = new THREE.MeshStandardMaterial({
       color: 0x38bdf8,
       emissive: 0x0284c7,
-      emissiveIntensity: 0.6,
-      metalness: 0.8,
+      emissiveIntensity: 0.65,
+      metalness: 0.85,
     });
 
-    const panelLeft = new THREE.Mesh(panelGeo, panelMat);
-    panelLeft.position.set(-0.11, 0, 0);
-    issBody.add(panelLeft);
+    const leftWing = new THREE.Mesh(wingGeo, wingMat);
+    leftWing.position.set(-0.13, 0, 0);
+    issStation.add(leftWing);
 
-    const panelRight = new THREE.Mesh(panelGeo, panelMat);
-    panelRight.position.set(0.11, 0, 0);
-    issBody.add(panelRight);
+    const rightWing = new THREE.Mesh(wingGeo, wingMat);
+    rightWing.position.set(0.13, 0, 0);
+    issStation.add(rightWing);
 
-    issBody.position.set(1.38, 0.2, 0);
-    scene.add(issBody);
+    // Blinking Cyan Beacon
+    const beaconGeo = new THREE.SphereGeometry(0.012, 12, 12);
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+    const beaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
+    beaconMesh.position.set(0, 0.025, 0);
+    issStation.add(beaconMesh);
 
-    // 6. Outer Satellite Orbit Rings
+    issStation.position.set(1.42, 0, 0);
+    issGroup.add(issStation);
+
+    // 6. Two Outer Hologram Orbit Rings
     const ring1Geo = new THREE.TorusGeometry(1.45, 0.011, 16, 120);
     const ring1Mat = new THREE.MeshBasicMaterial({
       color: 0x00f0ff,
@@ -283,7 +318,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     const stars = new THREE.Points(starGeo, starMat);
     scene.add(stars);
 
-    // Auto-Resize observer
+    // Auto-Resize Container Observer
     const resizeObserver = new ResizeObserver(() => {
       const next = getBoxSize();
       camera.aspect = next.width / next.height;
@@ -292,7 +327,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     });
     resizeObserver.observe(containerRef.current);
 
-    // Mouse Parallax
+    // Mouse Parallax Interaction
     const mouse = { x: 0, y: 0 };
     const onMove = (e: MouseEvent) => {
       mouse.x = (e.clientX / window.innerWidth - 0.5) * 2;
@@ -300,7 +335,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     };
     window.addEventListener("mousemove", onMove);
 
-    // Animation Loop with Slow-Motion 0.0008 rad/frame Standby Rotation
+    // Animation Loop
     let animId: number;
     let moonAngle = 0;
     let issAngle = 0;
@@ -309,29 +344,35 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
       animId = requestAnimationFrame(animate);
       const { speaking: isSpeaking, listening: isListening } = stateRef.current;
 
-      // Strict requirement: 0.0008 rad/frame standby rotation
-      const baseSpin = isSpeaking ? 0.007 : isListening ? 0.004 : 0.0008;
+      // Real-time speed: 0.0008 rad/frame standby, 0.0018 when speaking
+      const baseSpin = isSpeaking ? 0.0018 : isListening ? 0.0012 : 0.0008;
 
       earthMesh.rotation.y += baseSpin;
       cloudMesh.rotation.y += baseSpin * 1.35;
       holoGrid.rotation.y += baseSpin * 1.15;
 
       // Orbiting 3D Moon
-      moonAngle += 0.0012;
+      moonAngle += 0.001;
       moonMesh.position.x = Math.cos(moonAngle) * 2.35;
       moonMesh.position.z = Math.sin(moonAngle) * 2.35;
-      moonMesh.rotation.y += 0.0012;
+      moonMesh.rotation.y += 0.001;
 
-      // Orbiting ISS
-      issAngle -= 0.008;
-      issBody.position.x = Math.cos(issAngle) * 1.38;
-      issBody.position.z = Math.sin(issAngle) * 1.38;
-      issBody.rotation.y = -issAngle;
+      // Orbiting ISS with tangential orientation
+      issAngle -= 0.007;
+      issStation.position.x = Math.cos(issAngle) * 1.42;
+      issStation.position.z = Math.sin(issAngle) * 1.42;
+      issStation.rotation.y = -issAngle + Math.PI / 2;
 
-      orbitRing1.rotation.z += 0.006;
-      orbitRing2.rotation.z -= 0.004;
+      // Beacon blinking effect
+      const beaconIntensity = (Math.sin(Date.now() * 0.008) + 1) * 0.5;
+      beaconMat.color.setRGB(0, beaconIntensity, beaconIntensity);
+
+      // Rings and stars
+      orbitRing1.rotation.z += 0.005;
+      orbitRing2.rotation.z -= 0.003;
       stars.rotation.y += 0.0005;
 
+      // Visual feedback colors
       ring1Mat.color.setHex(
         isSpeaking ? 0x10b981 : isListening ? 0xf43f5e : 0x00f0ff
       );
@@ -357,26 +398,21 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
       ref={containerRef}
       className="relative w-full h-full rounded-2xl bg-white/[0.03] border border-cyan-300/20 flex flex-col items-center justify-center p-2 overflow-hidden select-none"
     >
-      {/* Live Weather HUD Glassmorphic Pill */}
+      {/* Live Local Weather Overlay Compact Glass Pill */}
       <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/70 border border-cyan-400/30 backdrop-blur-md text-white shadow-lg pointer-events-auto">
-        <CloudSun size={15} className="text-amber-400 animate-pulse" />
-        <div className="flex flex-col">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-black text-cyan-200">{weather.temperature}°C</span>
-            <span className="text-[10px] text-slate-300 font-medium truncate">• {weather.location}</span>
-          </div>
-          <div className="flex items-center gap-2 text-[9px] text-slate-400 font-mono">
-            <span className="flex items-center gap-0.5">
-              <Droplets size={10} className="text-cyan-400" /> {weather.humidity}%
-            </span>
-            <span className="flex items-center gap-0.5">
-              <Wind size={10} className="text-sky-400" /> {weather.windSpeed} km/h
-            </span>
-          </div>
+        <CloudSun size={15} className="text-amber-400 animate-pulse shrink-0" />
+        <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-200">
+          <span>{weather.location}</span>
+          <span className="text-slate-400">•</span>
+          <span className="text-white font-extrabold">{weather.temperature}°C</span>
+          <span className="text-slate-400">•</span>
+          <span className="flex items-center gap-0.5 text-slate-300 text-[11px] font-mono">
+            <Droplets size={11} className="text-cyan-400" /> {weather.humidity}%
+          </span>
         </div>
       </div>
 
-      {/* Glow Behind Earth */}
+      {/* Radial Glow Behind Earth */}
       <div
         className={`absolute w-52 h-52 rounded-full blur-3xl transition-all duration-500 pointer-events-none ${
           speaking
