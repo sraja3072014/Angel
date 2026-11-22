@@ -45,18 +45,22 @@ export interface AIProviderConfig {
   id: string;
   name: string;
   category: "cloud" | "local" | "router";
-  apiKey: string;
+  apiKey: string; // multi-line allowed
   endpoint: string;
   defaultModel: string;
+  availableModels?: string[];
   enabled: boolean;
   status: "ready" | "missing_key" | "local_ready" | "offline" | "testing" | "verified";
   description: string;
+  consoleUrl?: string;
+  capabilities: string[];
 }
 
 const CONFIG_STORAGE_KEY = "angel_tauri_config_v3";
 const MEMORY_STORAGE_KEY = "angel_ram_memory_v3";
 const TELEMETRY_STORAGE_KEY = "angel_usage_telemetry";
 export const AI_PROVIDERS_STORAGE_KEY = "angel_ai_providers";
+export const AI_BRAIN_CONFIG_KEY = "angel_ai_brain_config";
 
 export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
   {
@@ -64,11 +68,13 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     name: "Auto Smart Router",
     category: "router",
     apiKey: "",
-    endpoint: "Multi-Tier Smart Failover",
+    endpoint: "Internal Multi-Tier Router",
     defaultModel: "auto-smart",
+    availableModels: ["auto-smart", "auto-fast", "auto-offline"],
     enabled: true,
     status: "ready",
-    description: "Automatic failover across Gemini, Groq, DeepSeek, & local Ollama",
+    description: "Automatic routing & failover across all configured brains.",
+    capabilities: ["🔄 AUTO FAILOVER", "⚡ SPEED ROUTING", "🔧 TOOL CALLING", "≋ STREAMING"],
   },
   {
     id: "gemini",
@@ -77,31 +83,31 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     apiKey: "",
     endpoint: "https://generativelanguage.googleapis.com",
     defaultModel: "gemini-3.5-flash-lite",
+    availableModels: ["gemini-3.5-flash-lite", "gemini-3.5-pro", "gemini-2.5-flash"],
     enabled: true,
     status: "missing_key",
-    description: "Ultra-fast multimodal reasoning & native screen vision",
+    description: "Gemini 3.5 Flash-Lite & Pro. Native multimodal vision & audio.",
+    consoleUrl: "https://aistudio.google.com/app/apikey",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "👁 VISION", "</> CODE GEN"],
   },
   {
     id: "groq",
-    name: "Groq LPU",
+    name: "Groq",
     category: "cloud",
     apiKey: "",
     endpoint: "https://api.groq.com/openai/v1/chat/completions",
     defaultModel: "llama-3.3-70b-versatile",
+    availableModels: [
+      "llama-3.3-70b-versatile",
+      "qwen-2.5-coder-32b",
+      "mixtral-8x7b-32768",
+      "deepseek-r1-distill-llama-70b",
+    ],
     enabled: true,
     status: "missing_key",
-    description: "Sub-second 500+ tokens/sec LPUs with Llama 3.3 70B & Mixtral",
-  },
-  {
-    id: "deepseek",
-    name: "DeepSeek AI",
-    category: "cloud",
-    apiKey: "",
-    endpoint: "https://api.deepseek.com/chat/completions",
-    defaultModel: "deepseek-chat",
-    enabled: true,
-    status: "missing_key",
-    description: "Deep reasoning & coding intelligence via DeepSeek V3",
+    description: "Fastest inference. Free tier. Llama & Qwen models.",
+    consoleUrl: "https://console.groq.com/keys",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "⚡ 500 T/S", "</> CODE GEN"],
   },
   {
     id: "openai",
@@ -109,10 +115,27 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     category: "cloud",
     apiKey: "",
     endpoint: "https://api.openai.com/v1/chat/completions",
-    defaultModel: "gpt-4o",
+    defaultModel: "gpt-4.1",
+    availableModels: ["gpt-4.1", "gpt-4.1-mini", "gpt-4o", "o3-mini", "codex-mini"],
     enabled: true,
     status: "missing_key",
-    description: "State-of-the-art GPT-4o, o3-mini, and Codex automation",
+    description: "GPT-5, GPT-4.1 and Codex. Strongest code generation.",
+    consoleUrl: "https://platform.openai.com/api-keys",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "👁 VISION", "</> CODE GEN"],
+  },
+  {
+    id: "deepseek",
+    name: "DeepSeek",
+    category: "cloud",
+    apiKey: "",
+    endpoint: "https://api.deepseek.com/chat/completions",
+    defaultModel: "deepseek-chat",
+    availableModels: ["deepseek-chat", "deepseek-reasoner"],
+    enabled: true,
+    status: "missing_key",
+    description: "DeepSeek V4 Flash & Pro. Cheap, strong at code and reasoning.",
+    consoleUrl: "https://platform.deepseek.com/api_keys",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "🧠 REASONING", "</> CODE GEN"],
   },
   {
     id: "anthropic",
@@ -121,82 +144,124 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     apiKey: "",
     endpoint: "https://api.anthropic.com/v1/messages",
     defaultModel: "claude-3-7-sonnet-latest",
+    availableModels: ["claude-3-7-sonnet-latest", "claude-3-5-haiku-latest", "claude-3-opus-latest"],
     enabled: true,
     status: "missing_key",
-    description: "Nuanced reasoning & tool use via Claude 3.7 Sonnet & 3.5 Haiku",
+    description: "Claude Opus & Sonnet. Best long-form reasoning and refactors.",
+    consoleUrl: "https://console.anthropic.com/settings/keys",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "👁 VISION", "</> CODE GEN"],
   },
   {
     id: "github",
-    name: "GitHub Copilot / Models",
+    name: "GitHub Copilot",
     category: "cloud",
     apiKey: "",
     endpoint: "https://models.inference.ai.azure.com/chat/completions",
     defaultModel: "gpt-4o",
+    availableModels: ["gpt-4o", "Llama-3.3-70B-Instruct", "Mistral-large-2407"],
     enabled: true,
     status: "missing_key",
-    description: "Free Azure AI models via your Personal Access Token (PAT)",
+    description: "GitHub Models inference — one PAT, many models.",
+    consoleUrl: "https://github.com/settings/tokens",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "</> CODE GEN"],
   },
   {
     id: "openrouter",
-    name: "Free LLM API (OpenRouter)",
+    name: "Free LLM API",
     category: "cloud",
     apiKey: "",
     endpoint: "https://openrouter.ai/api/v1/chat/completions",
     defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
+    availableModels: [
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "deepseek/deepseek-r1:free",
+      "google/gemini-2.0-flash-exp:free",
+    ],
     enabled: true,
     status: "ready",
-    description: "Free-tier community models including Llama 3.3 70B Free",
+    description: "OpenRouter free-tier models — zero cost inference.",
+    consoleUrl: "https://openrouter.ai/keys",
+    capabilities: ["≋ STREAMING", "🆓 ZERO COST", "</> CODE GEN"],
   },
   {
     id: "ollama",
-    name: "Ollama (Offline Local)",
+    name: "Ollama",
     category: "local",
     apiKey: "",
     endpoint: "http://localhost:11434",
     defaultModel: "llama3.2:latest",
+    availableModels: ["llama3.2:latest", "qwen2.5-coder:latest", "deepseek-r1:latest"],
     enabled: true,
     status: "local_ready",
-    description: "100% private, sovereign offline LLM running on your Windows PC",
+    description: "Local offline models on localhost:11434 — auto-detected, no key.",
+    capabilities: ["⚡ LOCAL ENDPOINT", "🔒 100% PRIVATE", "≋ STREAMING", "</> CODE GEN"],
   },
   {
     id: "local_lmstudio",
-    name: "Local LLM (LM Studio / GGUF)",
+    name: "Local LLM",
     category: "local",
     apiKey: "",
-    endpoint: "http://localhost:1234/v1/chat/completions",
+    endpoint: "http://localhost:1234/v1",
     defaultModel: "local-model",
+    availableModels: ["local-model", "llama-3.2-3b-instruct"],
     enabled: true,
     status: "local_ready",
-    description: "OpenAI-compatible local inference server via LM Studio / llama.cpp",
+    description: "LM Studio, llama.cpp, vLLM custom endpoint — fully offline.",
+    capabilities: ["⚡ LOCAL ENDPOINT", "🔒 100% PRIVATE", "≋ STREAMING", "</> CODE GEN"],
   },
 ];
 
+export function extractKeysList(apiKeyRaw: string): string[] {
+  if (!apiKeyRaw) return [];
+  return apiKeyRaw
+    .split("\n")
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0);
+}
+
 export function loadAIProviders(): AIProviderConfig[] {
   try {
-    const raw = localStorage.getItem(AI_PROVIDERS_STORAGE_KEY);
+    const rawBrain = localStorage.getItem(AI_BRAIN_CONFIG_KEY);
+    const rawLegacy = localStorage.getItem(AI_PROVIDERS_STORAGE_KEY);
     const cfg = loadAngelConfig();
-    let providers: AIProviderConfig[] = raw ? JSON.parse(raw) : [];
 
+    let storedProviders: AIProviderConfig[] = [];
+    if (rawBrain) {
+      const parsed = JSON.parse(rawBrain);
+      storedProviders = parsed.providers || [];
+    } else if (rawLegacy) {
+      storedProviders = JSON.parse(rawLegacy);
+    }
+
+    const merged: AIProviderConfig[] = [];
     for (const def of DEFAULT_AI_PROVIDERS) {
-      const existing = providers.find((p) => p.id === def.id);
+      const existing = storedProviders.find((p) => p.id === def.id);
       if (!existing) {
-        providers.push({ ...def });
+        merged.push({ ...def });
       } else {
-        if (!existing.description) existing.description = def.description;
-        if (!existing.category) existing.category = def.category;
-        if (!existing.endpoint) existing.endpoint = def.endpoint;
+        merged.push({
+          ...def,
+          ...existing,
+          capabilities: def.capabilities,
+          consoleUrl: def.consoleUrl,
+          description: def.description,
+          availableModels: existing.availableModels && existing.availableModels.length > 0
+            ? existing.availableModels
+            : def.availableModels,
+        });
       }
     }
 
-    const gemini = providers.find((p) => p.id === "gemini");
+    // Sync legacy geminiKey if needed
+    const gemini = merged.find((p) => p.id === "gemini");
     if (gemini) {
       if (cfg.geminiKey && !gemini.apiKey) {
         gemini.apiKey = cfg.geminiKey;
       }
-      gemini.status = gemini.apiKey.trim() ? "ready" : "missing_key";
+      gemini.status = extractKeysList(gemini.apiKey).length > 0 ? "ready" : "missing_key";
     }
 
-    return providers;
+    return merged;
   } catch {
     return DEFAULT_AI_PROVIDERS;
   }
@@ -205,10 +270,19 @@ export function loadAIProviders(): AIProviderConfig[] {
 export function saveAIProviders(providers: AIProviderConfig[]) {
   try {
     localStorage.setItem(AI_PROVIDERS_STORAGE_KEY, JSON.stringify(providers));
+    const brainConfig = {
+      providers,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(AI_BRAIN_CONFIG_KEY, JSON.stringify(brainConfig));
+
     const gemini = providers.find((p) => p.id === "gemini");
-    if (gemini && gemini.apiKey) {
-      const cfg = loadAngelConfig();
-      saveAngelConfig({ ...cfg, geminiKey: gemini.apiKey.trim() });
+    if (gemini) {
+      const firstKey = extractKeysList(gemini.apiKey)[0] || "";
+      if (firstKey) {
+        const cfg = loadAngelConfig();
+        saveAngelConfig({ ...cfg, geminiKey: firstKey });
+      }
     }
   } catch {}
 }
@@ -216,12 +290,15 @@ export function saveAIProviders(providers: AIProviderConfig[]) {
 export async function testProviderConnection(provider: AIProviderConfig): Promise<{
   ok: boolean;
   message: string;
+  latencyMs?: number;
   models?: string[];
 }> {
+  const startTime = performance.now();
   try {
     if (provider.id === "ollama") {
       const baseUrl = provider.endpoint.replace(/\/$/, "");
       const res = await fetch(`${baseUrl}/api/tags`);
+      const latencyMs = Math.round(performance.now() - startTime);
       if (res.ok) {
         const data = await res.json();
         const models = (data.models || []).map((m: any) => m.name || m.model);
@@ -229,8 +306,9 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           ok: true,
           message:
             models.length > 0
-              ? `Online (${models.length} local models detected)`
-              : "Ollama online (no models found; pull one with: ollama pull llama3.2)",
+              ? `Connected • ${latencyMs}ms (${models.length} local models)`
+              : `Connected • ${latencyMs}ms (no local models; run 'ollama pull llama3.2')`,
+          latencyMs,
           models,
         };
       }
@@ -238,67 +316,81 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
     }
 
     if (provider.id === "local_lmstudio") {
-      const baseUrl = provider.endpoint.replace(/\/chat\/completions$/, "").replace(/\/v1$/, "");
-      const res = await fetch(`${baseUrl}/v1/models`);
+      let baseUrl = provider.endpoint.replace(/\/chat\/completions$/, "").replace(/\/$/, "");
+      if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
+      const res = await fetch(`${baseUrl}/models`);
+      const latencyMs = Math.round(performance.now() - startTime);
       if (res.ok) {
         const data = await res.json();
         const models = (data.data || []).map((m: any) => m.id);
         return {
           ok: true,
-          message: models.length > 0 ? `Online (${models.length} model loaded)` : "LM Studio server detected",
+          message:
+            models.length > 0
+              ? `Connected • ${latencyMs}ms (${models.length} model loaded)`
+              : `Connected • ${latencyMs}ms (LM Studio server online)`,
+          latencyMs,
           models,
         };
       }
       return { ok: false, message: `LM Studio error HTTP ${res.status}` };
     }
 
+    const keyList = extractKeysList(provider.apiKey);
+    const activeKey = keyList[0] || (provider.id === "gemini" ? loadAngelConfig().geminiKey.trim() : "");
+
     if (provider.id === "gemini") {
-      const key = provider.apiKey.trim() || loadAngelConfig().geminiKey.trim();
-      if (!key) return { ok: false, message: "Gemini API key is required" };
-      const ai = new GoogleGenAI({ apiKey: key });
-      const res = await ai.models.generateContent({
+      if (!activeKey) return { ok: false, message: "Gemini API key is required" };
+      const ai = new GoogleGenAI({ apiKey: activeKey });
+      await ai.models.generateContent({
         model: "gemini-2.5-flash",
-        contents: "Reply with 'ok'",
+        contents: "Respond with 'ok'",
       });
-      return { ok: true, message: `Connected to Gemini (${(res.text || "ok").trim().slice(0, 16)})` };
+      const latencyMs = Math.round(performance.now() - startTime);
+      return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
     }
 
     if (provider.id === "anthropic") {
-      if (!provider.apiKey.trim()) return { ok: false, message: "Anthropic API key required" };
+      if (!activeKey) return { ok: false, message: "Anthropic API key required" };
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
-          "x-api-key": provider.apiKey.trim(),
+          "x-api-key": activeKey,
           "anthropic-version": "2023-06-01",
           "content-type": "application/json",
           "dangerously-allow-browser": "true",
         },
         body: JSON.stringify({
           model: provider.defaultModel || "claude-3-5-haiku-latest",
-          max_tokens: 10,
+          max_tokens: 5,
           messages: [{ role: "user", content: "ping" }],
         }),
       });
-      if (res.ok) return { ok: true, message: "Claude API connected successfully" };
+      const latencyMs = Math.round(performance.now() - startTime);
+      if (res.ok) return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
       const err = await res.json().catch(() => ({}));
       return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
     }
 
-    // OpenAI compatible: Groq, DeepSeek, OpenAI, GitHub, OpenRouter
-    if (!provider.apiKey.trim() && provider.id !== "openrouter") {
-      return { ok: false, message: "API Key / PAT required" };
+    if (!activeKey && provider.id !== "openrouter") {
+      return { ok: false, message: "API key or token is required" };
+    }
+
+    let targetUrl = provider.endpoint;
+    if (provider.id === "local_lmstudio" && !targetUrl.includes("/chat/completions")) {
+      targetUrl = `${targetUrl.replace(/\/$/, "")}/chat/completions`;
     }
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (provider.apiKey.trim()) {
-      headers["Authorization"] = `Bearer ${provider.apiKey.trim()}`;
+    if (activeKey) {
+      headers["Authorization"] = `Bearer ${activeKey}`;
     }
     if (provider.id === "openrouter") {
       headers["HTTP-Referer"] = "https://projectangel.ai";
       headers["X-Title"] = "Angel AI";
     }
 
-    const res = await fetch(provider.endpoint, {
+    const res = await fetch(targetUrl, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -308,8 +400,9 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       }),
     });
 
+    const latencyMs = Math.round(performance.now() - startTime);
     if (res.ok) {
-      return { ok: true, message: `${provider.name} connected successfully` };
+      return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
     }
     const err = await res.json().catch(() => ({}));
     return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
@@ -413,6 +506,8 @@ export class CloudBrainService {
   private memoryCache: Record<string, MemoryFact> = {};
   private supabase: SupabaseClient | null = null;
   private isListeningRelay = false;
+  // Multi-key round-robin rotation index
+  private keyRotationIndex: Record<string, number> = {};
 
   constructor() {
     try {
@@ -555,7 +650,8 @@ export class CloudBrainService {
     const cfg = loadAngelConfig();
     const providers = loadAIProviders();
     const gemini = providers.find((p) => p.id === "gemini");
-    const apiKey = gemini?.apiKey || cfg.geminiKey;
+    const geminiKeys = gemini ? extractKeysList(gemini.apiKey) : [];
+    const apiKey = geminiKeys[0] || cfg.geminiKey;
 
     if (!apiKey) {
       return { success: false, message: "Gemini API Key needed to forge new skills." };
@@ -581,6 +677,10 @@ Never use destructive commands (rm, del, format).`;
   }
 
   private async executeActionTags(fullText: string): Promise<void> {
+    // Check if tool calling is disabled by the user
+    const toolCallingEnabled = localStorage.getItem("angel_tool_calling") !== "false";
+    if (!toolCallingEnabled) return;
+
     const actionMatches = [...fullText.matchAll(/\[ACTION:([^\|\]]+)(?:\|([^\]]+))?\]/g)];
     for (const match of actionMatches) {
       const actionType = match[1]?.trim().toUpperCase();
@@ -649,6 +749,20 @@ Never use destructive commands (rm, del, format).`;
     }
   }
 
+  /**
+   * Rotate and return keys in round-robin order for rate-limit dodging
+   */
+  private getRotatedKeyOrder(provider: AIProviderConfig): string[] {
+    const keys = extractKeysList(provider.apiKey);
+    if (keys.length <= 1) return keys;
+
+    const currentIdx = (this.keyRotationIndex[provider.id] || 0) % keys.length;
+    this.keyRotationIndex[provider.id] = (currentIdx + 1) % keys.length;
+
+    // Return list starting with currentIdx, followed by the rest
+    return [...keys.slice(currentIdx), ...keys.slice(0, currentIdx)];
+  }
+
   private async queryGemini(
     provider: AIProviderConfig,
     prompt: string,
@@ -656,12 +770,11 @@ Never use destructive commands (rm, del, format).`;
     systemInstruction: string,
     options?: GeminiAskOptions
   ): Promise<string> {
-    const cfg = loadAngelConfig();
-    const apiKey = provider.apiKey.trim() || cfg.geminiKey.trim();
-    if (!apiKey) throw new Error("Gemini API Key missing");
+    const keyList = this.getRotatedKeyOrder(provider);
+    const fallbackKey = loadAngelConfig().geminiKey.trim();
+    const candidateKeys = keyList.length > 0 ? keyList : fallbackKey ? [fallbackKey] : [];
 
-    const ai = new GoogleGenAI({ apiKey });
-    const ladder = [provider.defaultModel || "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    if (candidateKeys.length === 0) throw new Error("Gemini API Key missing");
 
     const contentParts: any[] = [{ text: prompt }];
     if (screenBase64) {
@@ -673,39 +786,53 @@ Never use destructive commands (rm, del, format).`;
       });
     }
 
-    for (const model of ladder) {
-      try {
-        let accumulated = "";
-        let firstSentenceSpoken = false;
+    const ladder = [provider.defaultModel || "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
-        const responseStream = await ai.models.generateContentStream({
-          model,
-          contents: contentParts,
-          config: { systemInstruction },
-        });
+    // Try keys sequentially if 429 occurs
+    for (const apiKey of candidateKeys) {
+      const ai = new GoogleGenAI({ apiKey });
 
-        for await (const chunk of responseStream) {
-          const chunkText = chunk.text || "";
-          accumulated += chunkText;
+      for (const model of ladder) {
+        try {
+          let accumulated = "";
+          let firstSentenceSpoken = false;
 
-          const displayClean = accumulated.replace(/\[ACTION:[^\]]+\]/g, "").trim();
-          options?.onChunk?.(displayClean);
+          const responseStream = await ai.models.generateContentStream({
+            model,
+            contents: contentParts,
+            config: { systemInstruction },
+          });
 
-          if (!firstSentenceSpoken && options?.onFirstSentence) {
-            const sentenceMatch = displayClean.match(/^(.*?[.!?\n])\s+/);
-            if (sentenceMatch && sentenceMatch[1].length > 18) {
-              firstSentenceSpoken = true;
-              options.onFirstSentence(sentenceMatch[1].trim());
+          for await (const chunk of responseStream) {
+            const chunkText = chunk.text || "";
+            accumulated += chunkText;
+
+            const displayClean = accumulated.replace(/\[ACTION:[^\]]+\]/g, "").trim();
+            options?.onChunk?.(displayClean);
+
+            if (!firstSentenceSpoken && options?.onFirstSentence) {
+              const sentenceMatch = displayClean.match(/^(.*?[.!?\n])\s+/);
+              if (sentenceMatch && sentenceMatch[1].length > 18) {
+                firstSentenceSpoken = true;
+                options.onFirstSentence(sentenceMatch[1].trim());
+              }
             }
           }
-        }
 
-        return accumulated.trim();
-      } catch {
-        continue;
+          if (accumulated.trim()) {
+            return accumulated.trim();
+          }
+        } catch (e: any) {
+          const msg = e?.message || "";
+          if (msg.includes("429") || msg.includes("Quota") || msg.includes("rate")) {
+            console.warn(`Gemini key rate-limited, rotating to next key...`);
+            break; // Try next key
+          }
+          continue; // Try next model in ladder
+        }
       }
     }
-    throw new Error("Gemini inference failed across model ladder");
+    throw new Error("All Gemini keys and ladder models exhausted");
   }
 
   private async queryOpenAICompatible(
@@ -715,41 +842,64 @@ Never use destructive commands (rm, del, format).`;
     temperature: number,
     options?: GeminiAskOptions
   ): Promise<string> {
-    if (!provider.apiKey.trim() && provider.id !== "openrouter" && provider.id !== "local_lmstudio") {
-      throw new Error(`${provider.name} API Key missing`);
+    const keyList = this.getRotatedKeyOrder(provider);
+    const candidateKeys = keyList.length > 0 ? keyList : [""];
+
+    let targetUrl = provider.endpoint;
+    if (provider.id === "local_lmstudio" && !targetUrl.includes("/chat/completions")) {
+      targetUrl = `${targetUrl.replace(/\/$/, "")}/chat/completions`;
     }
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (provider.apiKey.trim()) {
-      headers["Authorization"] = `Bearer ${provider.apiKey.trim()}`;
-    }
-    if (provider.id === "openrouter") {
-      headers["HTTP-Referer"] = "https://projectangel.ai";
-      headers["X-Title"] = "Angel AI";
+    let lastErrorMsg = "";
+
+    for (const key of candidateKeys) {
+      if (!key && provider.id !== "openrouter" && provider.id !== "local_lmstudio") {
+        continue;
+      }
+
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (key) {
+        headers["Authorization"] = `Bearer ${key}`;
+      }
+      if (provider.id === "openrouter") {
+        headers["HTTP-Referer"] = "https://projectangel.ai";
+        headers["X-Title"] = "Angel AI";
+      }
+
+      try {
+        const res = await fetch(targetUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model: provider.defaultModel,
+            messages: [
+              { role: "system", content: systemInstruction },
+              { role: "user", content: prompt },
+            ],
+            temperature,
+          }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          lastErrorMsg = errData?.error?.message || `HTTP ${res.status}`;
+          if (res.status === 429) {
+            console.warn(`Key for ${provider.name} rate-limited, rotating key...`);
+            continue;
+          }
+          throw new Error(lastErrorMsg);
+        }
+
+        const data = await res.json();
+        const reply = data.choices?.[0]?.message?.content || "";
+        options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
+        return reply;
+      } catch (err: any) {
+        lastErrorMsg = err?.message || "Network error";
+      }
     }
 
-    const res = await fetch(provider.endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: provider.defaultModel,
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: prompt },
-        ],
-        temperature,
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `HTTP ${res.status} from ${provider.name}`);
-    }
-
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content || "";
-    options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
-    return reply;
+    throw new Error(`${provider.name} failed: ${lastErrorMsg || "No active key succeeded"}`);
   }
 
   private async queryAnthropic(
@@ -759,34 +909,49 @@ Never use destructive commands (rm, del, format).`;
     temperature: number,
     options?: GeminiAskOptions
   ): Promise<string> {
-    if (!provider.apiKey.trim()) throw new Error("Anthropic API Key missing");
+    const keyList = this.getRotatedKeyOrder(provider);
+    if (keyList.length === 0) throw new Error("Anthropic API Key missing");
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": provider.apiKey.trim(),
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-        "dangerously-allow-browser": "true",
-      },
-      body: JSON.stringify({
-        model: provider.defaultModel || "claude-3-7-sonnet-latest",
-        system: systemInstruction,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 1500,
-        temperature,
-      }),
-    });
+    let lastErr = "";
+    for (const key of keyList) {
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "dangerously-allow-browser": "true",
+          },
+          body: JSON.stringify({
+            model: provider.defaultModel || "claude-3-7-sonnet-latest",
+            system: systemInstruction,
+            messages: [{ role: "user", content: prompt }],
+            max_tokens: 1500,
+            temperature,
+          }),
+        });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `HTTP ${res.status} from Anthropic`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          lastErr = err?.error?.message || `HTTP ${res.status}`;
+          if (res.status === 429) {
+            console.warn("Anthropic key rate limited, rotating...");
+            continue;
+          }
+          throw new Error(lastErr);
+        }
+
+        const data = await res.json();
+        const reply = data.content?.[0]?.text || "";
+        options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
+        return reply;
+      } catch (err: any) {
+        lastErr = err?.message || "Anthropic request error";
+      }
     }
 
-    const data = await res.json();
-    const reply = data.content?.[0]?.text || "";
-    options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
-    return reply;
+    throw new Error(`Anthropic error: ${lastErr}`);
   }
 
   private async queryOllama(
@@ -821,10 +986,6 @@ Never use destructive commands (rm, del, format).`;
     return reply;
   }
 
-  /**
-   * Unified Multi-Provider Routing Engine
-   * Routes prompt to Gemini, Groq, DeepSeek, OpenAI, Claude, GitHub, OpenRouter, Ollama, or LM Studio
-   */
   public async askGemini(userPrompt: string, options?: GeminiAskOptions): Promise<string> {
     return this.askAngelBrain(userPrompt, options);
   }
@@ -872,10 +1033,9 @@ Never use destructive commands (rm, del, format).`;
       targetProvider = providers.find((p) => p.id === "auto") || providers[0];
     }
 
-    // Build execution list (with failover order)
+    // Build execution list
     const executionList: AIProviderConfig[] = [];
     if (targetProvider.id === "auto") {
-      // Auto Smart Router priority queue
       const priorityOrder = ["gemini", "groq", "deepseek", "openrouter", "ollama", "local_lmstudio", "openai", "anthropic", "github"];
       for (const pid of priorityOrder) {
         const found = providers.find((p) => p.id === pid && p.enabled);
@@ -908,12 +1068,11 @@ Never use destructive commands (rm, del, format).`;
         }
 
         if (fullText && fullText.trim()) {
-          // Execute sequential action tags across all providers
+          // Parse & execute sequential action tags (if tool calling is enabled)
           await this.executeActionTags(fullText);
 
           const cleanReply = fullText.replace(/\[ACTION:[^\]]+\]/g, "").trim();
 
-          // Progress display & fast first sentence
           options?.onChunk?.(cleanReply);
           if (options?.onFirstSentence && cleanReply) {
             options.onFirstSentence(cleanReply);

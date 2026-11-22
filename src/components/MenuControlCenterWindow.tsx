@@ -38,6 +38,7 @@ import {
   Globe,
   Sparkles,
   HardDrive,
+  Check,
 } from "lucide-react";
 import {
   loadAngelConfig,
@@ -52,6 +53,7 @@ import {
   loadAIProviders,
   saveAIProviders,
   testProviderConnection,
+  extractKeysList,
 } from "../services/cloudBrain";
 
 interface MenuControlCenterProps {
@@ -213,8 +215,19 @@ export function MenuControlCenterWindow({
   // TAB 2: AI BRAIN STATE & MULTI-PROVIDER
   // ==========================================
   const [providers, setProviders] = useState<AIProviderConfig[]>(() => loadAIProviders());
+  const [activeProviderId, setActiveProviderId] = useState<string>(() => {
+    const saved = localStorage.getItem("angel_active_provider");
+    if (saved) return saved;
+    const model = localStorage.getItem("angel_primary_model") || "Auto";
+    if (model === "Auto" || model === "auto-smart") return "auto";
+    const found = loadAIProviders().find((p) => p.id === model || p.defaultModel === model);
+    return found ? found.id : "gemini";
+  });
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     return localStorage.getItem("angel_primary_model") || "Auto";
+  });
+  const [toolCalling, setToolCalling] = useState<boolean>(() => {
+    return localStorage.getItem("angel_tool_calling") !== "false";
   });
   const [autoFailover, setAutoFailover] = useState<boolean>(() => {
     return localStorage.getItem("angel_ai_failover") !== "false";
@@ -232,9 +245,8 @@ export function MenuControlCenterWindow({
       "You are Angel AI, an ultra-fast, sovereign Windows 11 desktop AI companion created by Subramaniam Raja. Be helpful, concise, execute system actions via [ACTION:TAG|PARAM], and respond bilingually in Tamil, English, and Tanglish."
     );
   });
-  const [showKeyMap, setShowKeyMap] = useState<Record<string, boolean>>({});
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string; latencyMs?: number }>>({});
   const [scanningOllama, setScanningOllama] = useState<boolean>(false);
 
   const handleUpdateProvider = (id: string, updates: Partial<AIProviderConfig>) => {
@@ -243,6 +255,33 @@ export function MenuControlCenterWindow({
       saveAIProviders(next);
       return next;
     });
+  };
+
+  const handleSelectProvider = (providerId: string) => {
+    setActiveProviderId(providerId);
+    localStorage.setItem("angel_active_provider", providerId);
+    const p = providers.find((item) => item.id === providerId);
+    if (p) {
+      const model = providerId === "auto" ? "Auto" : p.defaultModel;
+      setSelectedModel(model);
+      localStorage.setItem("angel_primary_model", model);
+      window.dispatchEvent(
+        new CustomEvent("angel-model-changed", {
+          detail: { model, provider: providerId },
+        })
+      );
+    }
+  };
+
+  const handleChangeProviderModel = (providerId: string, newModel: string) => {
+    handleUpdateProvider(providerId, { defaultModel: newModel });
+    setSelectedModel(newModel);
+    localStorage.setItem("angel_primary_model", newModel);
+    window.dispatchEvent(
+      new CustomEvent("angel-model-changed", {
+        detail: { model: newModel, provider: providerId },
+      })
+    );
   };
 
   const handleTestProvider = async (provider: AIProviderConfig) => {
@@ -258,38 +297,39 @@ export function MenuControlCenterWindow({
     }
   };
 
-  const handleScanOllama = async () => {
+  const handleScanLocalModels = async (provider: AIProviderConfig) => {
     setScanningOllama(true);
-    const ollama = providers.find((p) => p.id === "ollama");
-    if (!ollama) return;
-    const result = await testProviderConnection(ollama);
+    const result = await testProviderConnection(provider);
     setScanningOllama(false);
+    setTestResults((prev) => ({ ...prev, [provider.id]: result }));
     if (result.ok && result.models && result.models.length > 0) {
-      handleUpdateProvider("ollama", {
+      handleUpdateProvider(provider.id, {
+        availableModels: result.models,
         defaultModel: result.models[0],
         status: "local_ready",
       });
-      showToast(`Detected ${result.models.length} local Ollama models: ${result.models.slice(0, 3).join(", ")}...`);
+      setSelectedModel(result.models[0]);
+      localStorage.setItem("angel_primary_model", result.models[0]);
+      showToast(`Detected ${result.models.length} local models: ${result.models.slice(0, 3).join(", ")}...`);
     } else {
       showToast(result.message);
     }
   };
 
-  const handleSelectActiveModel = (modelId: string) => {
-    setSelectedModel(modelId);
-    localStorage.setItem("angel_primary_model", modelId);
-    window.dispatchEvent(new CustomEvent("angel-model-changed", { detail: { model: modelId } }));
-    showToast(`Active Primary Brain set to: ${modelId}`);
-  };
-
   const handleSaveBrain = () => {
     saveAIProviders(providers);
+    localStorage.setItem("angel_active_provider", activeProviderId);
     localStorage.setItem("angel_primary_model", selectedModel);
+    localStorage.setItem("angel_tool_calling", toolCalling.toString());
     localStorage.setItem("angel_ai_failover", autoFailover.toString());
     localStorage.setItem("angel_brain_temperature", temperature.toString());
     localStorage.setItem("angel_response_style", responseStyle);
     localStorage.setItem("angel_custom_system_prompt", systemPrompt);
-    window.dispatchEvent(new CustomEvent("angel-model-changed", { detail: { model: selectedModel } }));
+    window.dispatchEvent(
+      new CustomEvent("angel-model-changed", {
+        detail: { model: selectedModel, provider: activeProviderId },
+      })
+    );
     showToast("AI Brain & Multi-Provider configuration saved!");
   };
 
@@ -1183,347 +1223,375 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 2. AI BRAIN TAB */}
-            {activeTab === "brain" && (
-              <div className="space-y-6 max-w-4xl">
-                <div>
-                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Brain size={18} className="text-cyan-400" />
-                    <span>Multi-Provider AI Brain & Routing Engine</span>
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Configure Cloud LLMs (Gemini, Groq, DeepSeek, OpenAI, Claude, GitHub, OpenRouter) and Offline Local Models (Ollama, LM Studio) with live ping tests and smart failover.
-                  </p>
-                </div>
+            {activeTab === "brain" && (() => {
+              const activeProvider = providers.find((p) => p.id === activeProviderId) || providers[0];
+              const isCloud = activeProvider.category === "cloud";
+              const isLocal = activeProvider.category === "local";
+              const isRouter = activeProvider.category === "router";
+              const testRes = testResults[activeProvider.id];
+              const isTesting = testingId === activeProvider.id;
 
-                {/* 1. LIVE PROVIDER CONFIGURATION TABLE (Directly above the AI Model cards) */}
-                <div className="p-4 rounded-2xl bg-white/5 border border-cyan-400/20 backdrop-blur-xl space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-white/10">
-                    <div>
-                      <div className="text-sm font-bold text-white flex items-center gap-2">
-                        <Server size={15} className="text-cyan-400" />
-                        <span>Live Provider Configuration Table</span>
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        Credentials and local URLs are encrypted locally in Windows AppData.
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={handleScanOllama}
-                        disabled={scanningOllama}
-                        className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-[11px] font-semibold text-emerald-300 flex items-center gap-1.5 transition disabled:opacity-50"
-                      >
-                        <RefreshCw size={12} className={scanningOllama ? "animate-spin" : ""} />
-                        <span>{scanningOllama ? "Scanning Ollama..." : "Scan Local Ollama Models"}</span>
-                      </button>
-                    </div>
+              // Key list for multiline auto-rotator
+              const keyList = (activeProvider.apiKey || "")
+                .split("\n")
+                .map((k) => k.trim())
+                .filter((k) => k.length > 0);
+              const keyCount = keyList.length;
+
+              return (
+                <div className="space-y-6 max-w-4xl">
+                  {/* AI PROVIDER Header */}
+                  <div>
+                    <h2 className="text-lg font-black tracking-wide text-white flex items-center gap-2">
+                      <Brain size={18} className="text-cyan-400" />
+                      <span>AI PROVIDER</span>
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Choose the brain that powers Angel AI. Switch between ultra-fast cloud models or offline local LLMs at any time.
+                    </p>
                   </div>
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs border-collapse">
-                      <thead>
-                        <tr className="border-b border-white/10 text-slate-400 font-mono text-[11px]">
-                          <th className="py-2 px-2.5">Provider</th>
-                          <th className="py-2 px-2.5">Endpoint / API Key</th>
-                          <th className="py-2 px-2.5">Default Model</th>
-                          <th className="py-2 px-2.5 text-right">Status & Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {providers.map((p) => {
-                          const isLocal = p.category === "local";
-                          const isRouter = p.category === "router";
-                          const isTesting = testingId === p.id;
-                          const showKey = showKeyMap[p.id] || false;
-                          const testRes = testResults[p.id];
-
-                          return (
-                            <tr key={p.id} className="hover:bg-white/[0.03] transition-colors">
-                              {/* Column 1: Provider Name & Badge */}
-                              <td className="py-3 px-2.5 align-middle">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center shrink-0">
-                                    {p.id === "auto" && <Zap size={13} className="text-amber-400" />}
-                                    {p.id === "gemini" && <Brain size={13} className="text-cyan-400" />}
-                                    {p.id === "groq" && <Zap size={13} className="text-orange-400" />}
-                                    {p.id === "deepseek" && <Cpu size={13} className="text-blue-400" />}
-                                    {p.id === "openai" && <Sparkles size={13} className="text-emerald-400" />}
-                                    {p.id === "anthropic" && <Sparkles size={13} className="text-indigo-400" />}
-                                    {p.id === "github" && <GitMerge size={13} className="text-purple-400" />}
-                                    {p.id === "openrouter" && <Globe size={13} className="text-teal-400" />}
-                                    {p.id === "ollama" && <HardDrive size={13} className="text-emerald-400" />}
-                                    {p.id === "local_lmstudio" && <Server size={13} className="text-sky-400" />}
-                                  </div>
-                                  <div>
-                                    <div className="font-bold text-white text-xs flex items-center gap-1.5">
-                                      <span>{p.name}</span>
-                                      {selectedModel === p.id && (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">
-                                          ACTIVE
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="text-[10px] text-slate-400 line-clamp-1">{p.description}</div>
-                                  </div>
-                                </div>
-                              </td>
-
-                              {/* Column 2: Endpoint / API Key */}
-                              <td className="py-3 px-2.5 align-middle min-w-[200px]">
-                                {isRouter ? (
-                                  <div className="text-[11px] font-mono text-cyan-300 bg-black/40 px-2 py-1 rounded border border-white/10">
-                                    {p.endpoint}
-                                  </div>
-                                ) : isLocal ? (
-                                  <input
-                                    type="text"
-                                    value={p.endpoint}
-                                    onChange={(e) => handleUpdateProvider(p.id, { endpoint: e.target.value })}
-                                    placeholder="http://localhost:11434"
-                                    className="w-full px-2 py-1 bg-black/40 border border-white/10 rounded text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                                  />
-                                ) : (
-                                  <div className="relative flex items-center">
-                                    <input
-                                      type={showKey ? "text" : "password"}
-                                      value={p.apiKey}
-                                      onChange={(e) =>
-                                        handleUpdateProvider(p.id, {
-                                          apiKey: e.target.value,
-                                          status: e.target.value.trim() ? "ready" : "missing_key",
-                                        })
-                                      }
-                                      placeholder={p.id === "openrouter" ? "Optional key or Free API" : "Enter API Key / Token"}
-                                      className="w-full pr-7 px-2 py-1 bg-black/40 border border-white/10 rounded text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => setShowKeyMap((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
-                                      className="absolute right-2 text-slate-400 hover:text-white"
-                                    >
-                                      {showKey ? <EyeOff size={11} /> : <Eye size={11} />}
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-
-                              {/* Column 3: Default Model */}
-                              <td className="py-3 px-2.5 align-middle min-w-[140px]">
-                                <input
-                                  type="text"
-                                  value={p.defaultModel}
-                                  onChange={(e) => handleUpdateProvider(p.id, { defaultModel: e.target.value })}
-                                  className="w-full px-2 py-1 bg-black/40 border border-white/10 rounded text-[11px] font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                                />
-                              </td>
-
-                              {/* Column 4: Status & Test Action */}
-                              <td className="py-3 px-2.5 align-middle text-right shrink-0">
-                                <div className="flex items-center justify-end gap-2">
-                                  {/* Status badge */}
-                                  {isTesting ? (
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-cyan-950 text-cyan-300 border border-cyan-400/40 animate-pulse">
-                                      Testing...
-                                    </span>
-                                  ) : isRouter ? (
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                                      Auto-Router
-                                    </span>
-                                  ) : isLocal ? (
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950 text-indigo-300 border border-indigo-500/40">
-                                      Local
-                                    </span>
-                                  ) : p.apiKey.trim() || p.id === "openrouter" ? (
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-500/40">
-                                      Ready
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-950 text-amber-300 border border-amber-500/40">
-                                      Missing Key
-                                    </span>
-                                  )}
-
-                                  {/* Test ping button */}
-                                  {!isRouter && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleTestProvider(p)}
-                                      disabled={isTesting}
-                                      title="Test API endpoint connection"
-                                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400/40 text-[11px] font-bold text-slate-300 hover:text-cyan-200 transition"
-                                    >
-                                      Test
-                                    </button>
-                                  )}
-                                </div>
-                                {testRes && (
-                                  <div
-                                    className={`text-[9px] mt-1 font-mono line-clamp-1 ${
-                                      testRes.ok ? "text-emerald-400" : "text-rose-400"
-                                    }`}
-                                  >
-                                    {testRes.message}
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* 2. AI MODELS SELECTION GRID (Below the Configuration Table) */}
-                <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-sm font-bold text-white">Active Primary Brain & Foundation Model</div>
-                      <div className="text-xs text-slate-400">
-                        Click any model card to set as default (synced with the top-level chat composer selector).
-                      </div>
-                    </div>
-                    <span className="text-xs font-mono font-bold text-cyan-400 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-400/30">
-                      Active: {selectedModel}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                    {[
-                      { id: "Auto", name: "Auto Smart Router", desc: "Automatic failover across all ready providers", icon: Zap, color: "text-amber-400" },
-                      { id: "gemini", name: "Google Gemini 3.5", desc: "Multimodal audio, screen vision & deep reasoning", icon: Brain, color: "text-cyan-400" },
-                      { id: "groq", name: "Groq Llama 3.3 70B", desc: "Sub-second 500+ tokens/sec LPUs", icon: Zap, color: "text-orange-400" },
-                      { id: "deepseek", name: "DeepSeek V3", desc: "Deep mathematical reasoning & coding logic", icon: Cpu, color: "text-blue-400" },
-                      { id: "openai", name: "OpenAI GPT-4o", desc: "Omni intelligence & state-of-the-art tools", icon: Sparkles, color: "text-emerald-400" },
-                      { id: "anthropic", name: "Claude 3.7 Sonnet", desc: "Nuanced writing, agents & tool execution", icon: Sparkles, color: "text-indigo-400" },
-                      { id: "github", name: "GitHub Models (GPT-4o)", desc: "Free Azure inference via GitHub PAT", icon: GitMerge, color: "text-purple-400" },
-                      { id: "openrouter", name: "Free LLM (OpenRouter)", desc: "100% Free community Llama 3.3 70B", icon: Globe, color: "text-teal-400" },
-                      { id: "ollama", name: "Ollama (Offline Local)", desc: "Sovereign local LLM on localhost:11434", icon: HardDrive, color: "text-emerald-400" },
-                      { id: "local_lmstudio", name: "Local LM Studio / GGUF", desc: "OpenAI-compatible server on port 1234", icon: Server, color: "text-sky-400" },
-                    ].map((m) => {
-                      const Icon = m.icon;
-                      const isSelected = selectedModel === m.id || (m.id === "Auto" && selectedModel === "auto-smart");
-
+                  {/* 1. 2-COLUMN SELECTOR GRID */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {providers.map((p) => {
+                      const isSelected = activeProviderId === p.id;
                       return (
                         <div
-                          key={m.id}
-                          onClick={() => handleSelectActiveModel(m.id)}
-                          className={`p-3 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                          key={p.id}
+                          onClick={() => handleSelectProvider(p.id)}
+                          className={`p-3.5 rounded-2xl border cursor-pointer transition-all duration-200 relative flex items-start justify-between gap-3 ${
                             isSelected
-                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-[0_0_15px_rgba(0,240,255,0.15)]"
-                              : "bg-black/20 border-white/10 text-slate-300 hover:bg-white/5"
+                              ? "bg-cyan-950/30 border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.2)]"
+                              : "bg-slate-900/40 border-white/10 hover:border-white/20 hover:bg-white/[0.04]"
                           }`}
                         >
-                          <div className="flex items-center gap-2 mb-1">
-                            <Icon size={14} className={m.color} />
-                            <div className="text-xs font-bold text-white">{m.name}</div>
+                          <div className="flex items-start gap-3">
+                            <div className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center shrink-0 mt-0.5">
+                              {p.id === "auto" && <Zap size={16} className="text-amber-400" />}
+                              {p.id === "gemini" && <Brain size={16} className="text-cyan-400" />}
+                              {p.id === "groq" && <Zap size={16} className="text-orange-400" />}
+                              {p.id === "openai" && <Sparkles size={16} className="text-emerald-400" />}
+                              {p.id === "deepseek" && <Cpu size={16} className="text-blue-400" />}
+                              {p.id === "anthropic" && <Sparkles size={16} className="text-indigo-400" />}
+                              {p.id === "github" && <GitMerge size={16} className="text-purple-400" />}
+                              {p.id === "openrouter" && <Globe size={16} className="text-teal-400" />}
+                              {p.id === "ollama" && <HardDrive size={16} className="text-emerald-400" />}
+                              {p.id === "local_lmstudio" && <Server size={16} className="text-sky-400" />}
+                            </div>
+                            <div className="space-y-0.5 pr-2">
+                              <div className="font-bold text-white text-xs flex items-center gap-1.5">
+                                <span>{p.name}</span>
+                              </div>
+                              <div className="text-[11px] text-slate-400 leading-snug line-clamp-2">
+                                {p.description}
+                              </div>
+                            </div>
                           </div>
-                          <div className="text-[10px] text-slate-400 line-clamp-2">{m.desc}</div>
+
+                          {/* Top-Right Cyan Checkmark Indicator */}
+                          <div className="shrink-0 mt-0.5">
+                            {isSelected ? (
+                              <div className="w-5 h-5 rounded-full bg-cyan-400 text-slate-950 flex items-center justify-center font-bold shadow-md shadow-cyan-400/40">
+                                <Check size={12} strokeWidth={3} />
+                              </div>
+                            ) : (
+                              <div className="w-5 h-5 rounded-full border border-white/20 shrink-0" />
+                            )}
+                          </div>
                         </div>
                       );
                     })}
                   </div>
-                </div>
 
-                {/* 3. SMART ROUTING CONTROLS & SWITCHES */}
-                <div className="space-y-4">
-                  {/* Auto-Failover Switch */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-4">
-                    <div className="space-y-0.5">
-                      <div className="text-sm font-semibold text-white flex items-center gap-2">
-                        <Zap size={14} className="text-cyan-400" />
-                        <span>Auto-Failover to Local Ollama / Free LLM</span>
+                  {/* 2. DYNAMIC [PROVIDER] CONFIGURATION SECTION (ABOVE Model Dropdown) */}
+                  <div className="p-5 rounded-2xl bg-slate-950/80 border border-cyan-400/30 backdrop-blur-xl space-y-4 shadow-xl">
+                    {/* Header with Capability & Key Counter Pills */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+                      <div className="text-xs font-black tracking-wider text-cyan-200 uppercase flex items-center gap-2">
+                        <Sliders size={14} className="text-cyan-400" />
+                        <span>{activeProvider.name.toUpperCase()} CONFIGURATION</span>
                       </div>
-                      <p className="text-xs text-slate-400">
-                        If the primary cloud API fails, encounters rate limits, or is unreachable, automatically fall back to the next configured provider or local Ollama.
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={autoFailover}
-                        onChange={(e) => {
-                          setAutoFailover(e.target.checked);
-                          localStorage.setItem("angel_ai_failover", e.target.checked.toString());
-                        }}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
-                    </label>
-                  </div>
 
-                  {/* Temperature Slider */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                    <div className="flex justify-between text-xs text-slate-300">
-                      <span className="font-semibold text-white">Creativity / Temperature: {temperature}</span>
-                      <span className="text-slate-400 font-mono">
-                        {temperature <= 0.3
-                          ? "0.1 – 0.3 (Deterministic / Precise Code)"
-                          : temperature >= 0.8
-                          ? "0.8 – 1.0 (Creative & Brainstorming)"
-                          : "0.4 – 0.7 (Balanced Reasoning)"}
-                      </span>
+                      {/* Capabilities & Key Count Row */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {activeProvider.capabilities.map((cap, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-white/5 border border-white/10 text-slate-300"
+                          >
+                            {cap}
+                          </span>
+                        ))}
+                        {isCloud && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-cyan-950 border border-cyan-400/40 text-cyan-300">
+                            🔑 {keyCount} {keyCount === 1 ? "KEY" : "KEYS"}
+                          </span>
+                        )}
+                        {isLocal && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 border border-emerald-400/40 text-emerald-300">
+                            ⚡ LOCAL ENDPOINT
+                          </span>
+                        )}
+                      </div>
                     </div>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="1.0"
-                      step="0.05"
-                      value={temperature}
-                      onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                      className="w-full accent-cyan-400 bg-slate-800"
-                    />
-                  </div>
 
-                  {/* Response Style Presets */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
-                    <div className="text-sm font-semibold text-white">Response Style Preset</div>
-                    <div className="flex flex-wrap gap-2">
-                      {[
-                        { id: "concise", label: "Direct & Concise" },
-                        { id: "conversational", label: "Conversational Companion" },
-                        { id: "technical", label: "Technical Developer" },
-                        { id: "tanglish", label: "Bilingual Tanglish (தமிழ் + English)" },
-                      ].map((style) => (
-                        <button
-                          key={style.id}
-                          onClick={() => setResponseStyle(style.id)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
-                            responseStyle === style.id
-                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 font-bold"
-                              : "bg-black/20 border-white/10 text-slate-300 hover:bg-white/5"
-                          }`}
+                    {/* Multi-Line API Keys Auto-Rotator (Cloud) */}
+                    {isCloud && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <label className="font-semibold text-slate-200">
+                            {activeProvider.name} API Keys (one per line — rotated automatically)
+                          </label>
+                          {activeProvider.consoleUrl && (
+                            <a
+                              href={activeProvider.consoleUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 text-[11px] font-mono hover:underline"
+                            >
+                              <span>Get a key</span>
+                              <ExternalLink size={10} />
+                            </a>
+                          )}
+                        </div>
+                        <textarea
+                          rows={3}
+                          value={activeProvider.apiKey}
+                          onChange={(e) =>
+                            handleUpdateProvider(activeProvider.id, {
+                              apiKey: e.target.value,
+                              status: extractKeysList(e.target.value).length > 0 ? "ready" : "missing_key",
+                            })
+                          }
+                          placeholder={
+                            activeProvider.id === "openrouter"
+                              ? "Optional OpenRouter API key (sk-or-v1-...)\nLeave blank for default free rate limits"
+                              : "sk-...\nsk-...\n(Paste multiple keys here — one key per line)"
+                          }
+                          className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition"
+                        />
+                        <div className="text-[11px] text-slate-400">
+                          One key per line — rotated automatically to dodge rate limits.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Local Endpoint & Auto-Scan (Local) */}
+                    {isLocal && (
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-slate-200">
+                          {activeProvider.name} Base URL / Endpoint
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={activeProvider.endpoint}
+                            onChange={(e) =>
+                              handleUpdateProvider(activeProvider.id, {
+                                endpoint: e.target.value,
+                              })
+                            }
+                            placeholder={activeProvider.id === "ollama" ? "http://localhost:11434" : "http://localhost:1234/v1"}
+                            className="flex-1 px-3 py-2 bg-black/60 border border-white/15 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleScanLocalModels(activeProvider)}
+                            disabled={scanningOllama}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition shrink-0 disabled:opacity-50"
+                          >
+                            <RefreshCw size={13} className={scanningOllama ? "animate-spin" : ""} />
+                            <span>{scanningOllama ? "Scanning..." : "Scan Local Models"}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Auto Smart Router Info */}
+                    {isRouter && (
+                      <div className="p-3 rounded-xl bg-black/40 border border-cyan-400/20 text-xs text-slate-300 space-y-1">
+                        <div className="font-semibold text-cyan-200 flex items-center gap-1.5">
+                          <Zap size={13} className="text-cyan-400" />
+                          <span>Smart Failover Priority Active</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Routes prompts dynamically through Gemini &rarr; Groq &rarr; DeepSeek &rarr; OpenRouter &rarr; Ollama &rarr; Local LM Studio based on availability, latency, and configured API keys.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Model Dropdown & Test Connection Row */}
+                    <div className="pt-2 space-y-2 border-t border-white/10">
+                      <div>
+                        <label className="text-xs font-semibold text-slate-200 mb-1 block">
+                          Model
+                        </label>
+                        <select
+                          value={activeProvider.defaultModel}
+                          onChange={(e) => handleChangeProviderModel(activeProvider.id, e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-400 transition"
                         >
-                          {style.label}
+                          {(activeProvider.availableModels && activeProvider.availableModels.length > 0
+                            ? activeProvider.availableModels
+                            : [activeProvider.defaultModel]
+                          ).map((m) => (
+                            <option key={m} value={m} className="bg-slate-900 text-white">
+                              {m}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Test Connection Button & Latency Feedback */}
+                      <div className="flex items-center gap-3 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleTestProvider(activeProvider)}
+                          disabled={isTesting}
+                          className="px-4 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 hover:text-white text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-50 shadow-md shadow-cyan-500/10"
+                        >
+                          <Zap size={13} className={isTesting ? "animate-pulse" : ""} />
+                          <span>{isTesting ? "TESTING..." : "🔌 TEST CONNECTION"}</span>
                         </button>
-                      ))}
+
+                        {testRes && (
+                          <div
+                            className={`text-xs font-mono flex items-center gap-1.5 ${
+                              testRes.ok ? "text-emerald-400 font-bold" : "text-rose-400"
+                            }`}
+                          >
+                            <span>{testRes.message}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  {/* System Instructions Editor */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-semibold text-white">Custom System Instruction (All Providers)</span>
-                      <span className="text-slate-400 font-mono">{systemPrompt.length} chars</span>
+                  {/* 3. ENGINE BEHAVIOUR CONTROLS */}
+                  <div className="p-5 rounded-2xl bg-slate-950/60 border border-white/10 space-y-4">
+                    <div className="text-xs font-black tracking-wider text-cyan-200 uppercase">
+                      ENGINE BEHAVIOUR
                     </div>
-                    <textarea
-                      rows={4}
-                      value={systemPrompt}
-                      onChange={(e) => setSystemPrompt(e.target.value)}
-                      className="w-full p-2.5 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                    />
+
+                    {/* Tool Calling Toggle Switch */}
+                    <div className="flex items-center justify-between gap-4 pt-1">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-bold text-white">Tool calling</div>
+                        <div className="text-[11px] text-slate-400">
+                          Let the AI open apps, fetch weather, run system commands and drive widgets.
+                        </div>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={toolCalling}
+                          onChange={(e) => {
+                            setToolCalling(e.target.checked);
+                            localStorage.setItem("angel_tool_calling", e.target.checked.toString());
+                          }}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
+                      </label>
+                    </div>
+
+                    {/* Automatic Failover Toggle Switch */}
+                    <div className="flex items-center justify-between gap-4 pt-2 border-t border-white/5">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-bold text-white">Automatic failover</div>
+                        <div className="text-[11px] text-slate-400">
+                          If the selected provider errors or rate-limits, retry on any other configured provider.
+                        </div>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={autoFailover}
+                          onChange={(e) => {
+                            setAutoFailover(e.target.checked);
+                            localStorage.setItem("angel_ai_failover", e.target.checked.toString());
+                          }}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-500"></div>
+                      </label>
+                    </div>
+
+                    {/* Temperature Cyan Slider */}
+                    <div className="pt-2 border-t border-white/5 space-y-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-bold text-white">Temperature</span>
+                        <span className="font-mono text-cyan-400 font-bold px-2 py-0.5 rounded bg-cyan-950 border border-cyan-400/40">
+                          {temperature.toFixed(2)}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.0"
+                        max="1.0"
+                        step="0.05"
+                        value={temperature}
+                        onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                        className="w-full accent-cyan-400 bg-slate-800"
+                      />
+                      <div className="text-[11px] text-slate-400">
+                        Lower is precise and repeatable, higher is more creative.
+                      </div>
+                    </div>
+
+                    {/* Response Style Presets */}
+                    <div className="pt-2 border-t border-white/5 space-y-2">
+                      <div className="text-xs font-bold text-white">Response Style Preset</div>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { id: "concise", label: "Direct & Concise" },
+                          { id: "conversational", label: "Conversational Companion" },
+                          { id: "technical", label: "Technical Developer" },
+                          { id: "tanglish", label: "Bilingual Tanglish (தமிழ் + English)" },
+                        ].map((style) => (
+                          <button
+                            key={style.id}
+                            type="button"
+                            onClick={() => setResponseStyle(style.id)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition ${
+                              responseStyle === style.id
+                                ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 font-bold"
+                                : "bg-black/20 border-white/10 text-slate-300 hover:bg-white/5"
+                            }`}
+                          >
+                            {style.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Custom System Instruction Editor */}
+                    <div className="pt-2 border-t border-white/5 space-y-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-bold text-white">Custom System Instruction (All Providers)</span>
+                        <span className="text-slate-400 font-mono text-[10px]">{systemPrompt.length} chars</span>
+                      </div>
+                      <textarea
+                        rows={3}
+                        value={systemPrompt}
+                        onChange={(e) => setSystemPrompt(e.target.value)}
+                        className="w-full p-2.5 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
                   </div>
+
+                  {/* Save AI Brain Config Button */}
+                  <button
+                    type="button"
+                    onClick={handleSaveBrain}
+                    className="px-6 py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/25"
+                  >
+                    <Save size={15} />
+                    <span>Save AI Brain Config</span>
+                  </button>
                 </div>
-
-                <button
-                  onClick={handleSaveBrain}
-                  className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/20"
-                >
-                  <Save size={15} />
-                  <span>Save AI Brain & Multi-Provider Config</span>
-                </button>
-              </div>
-            )}
+              );
+            })()}
 
             {/* 3. API KEYS & CLOUD SYNC TAB */}
             {activeTab === "api_keys" && (
