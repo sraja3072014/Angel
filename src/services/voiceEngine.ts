@@ -334,18 +334,27 @@ export class AngelVoiceEngine {
       try {
         const base64Audio = await this.blobToBase64(blob);
         const ai = new GoogleGenAI({ apiKey: cfg.geminiKey });
-        const resp = await ai.models.generateContent({
-          model: "gemini-3.5-flash-lite",
-          contents: [
-            { inlineData: { mimeType, data: base64Audio } },
-            "Transcribe this audio accurately into text (Tamil, English, or Tanglish). Return ONLY the spoken words, nothing else.",
-          ],
-        });
-        const text = (resp.text || "").trim();
-        if (text) {
-          this.onStatusChange(`Command: "${text}"`, false);
-          this.onCommandRecognized(text);
-          return;
+        const cleanModelName = (m: string) => m.replace(/^(models\/)+/, "").trim();
+        const ladder = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
+
+        for (const model of ladder) {
+          try {
+            const resp = await ai.models.generateContent({
+              model: cleanModelName(model),
+              contents: [
+                { inlineData: { mimeType, data: base64Audio } },
+                "Transcribe this audio accurately into text (Tamil, English, or Tanglish). Return ONLY the spoken words, nothing else.",
+              ],
+            });
+            const text = (resp.text || "").trim();
+            if (text) {
+              this.onStatusChange(`Command: "${text}"`, false);
+              this.onCommandRecognized(text);
+              return;
+            }
+          } catch {
+            continue;
+          }
         }
       } catch {}
     }

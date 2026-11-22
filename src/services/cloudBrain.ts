@@ -82,11 +82,11 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     category: "cloud",
     apiKey: "",
     endpoint: "https://generativelanguage.googleapis.com",
-    defaultModel: "gemini-3.5-flash-lite",
-    availableModels: ["gemini-3.5-flash-lite", "gemini-3.5-pro", "gemini-2.5-flash"],
+    defaultModel: "gemini-3.8-flash",
+    availableModels: ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"],
     enabled: true,
     status: "missing_key",
-    description: "Gemini 3.5 Flash-Lite & Pro. Native multimodal vision & audio.",
+    description: "Gemini 3.8 Flash & Pro. Native multimodal vision & audio.",
     consoleUrl: "https://aistudio.google.com/app/apikey",
     capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "👁 VISION", "</> CODE GEN"],
   },
@@ -239,18 +239,51 @@ export function loadAIProviders(): AIProviderConfig[] {
       if (!existing) {
         merged.push({ ...def });
       } else {
+        let defModel = existing.defaultModel || def.defaultModel;
+        let availModels =
+          existing.availableModels && existing.availableModels.length > 0
+            ? existing.availableModels
+            : def.availableModels;
+
+        // Auto-migrate deprecated/stale Gemini models to gemini-3.8-flash
+        if (def.id === "gemini") {
+          if (
+            !defModel ||
+            defModel.includes("2.5") ||
+            defModel.includes("3.5") ||
+            defModel.includes("2.0") ||
+            defModel.includes("1.5")
+          ) {
+            defModel = "gemini-3.8-flash";
+          }
+          availModels = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
+        }
+
         merged.push({
           ...def,
           ...existing,
+          defaultModel: defModel,
           capabilities: def.capabilities,
           consoleUrl: def.consoleUrl,
           description: def.description,
-          availableModels: existing.availableModels && existing.availableModels.length > 0
-            ? existing.availableModels
-            : def.availableModels,
+          availableModels: availModels,
         });
       }
     }
+
+    // Auto-migrate stale saved primary model in localStorage
+    try {
+      const currentPrimary = localStorage.getItem("angel_primary_model");
+      if (
+        currentPrimary &&
+        (currentPrimary.includes("2.5") ||
+          currentPrimary.includes("3.5") ||
+          currentPrimary.includes("2.0") ||
+          currentPrimary.includes("1.5"))
+      ) {
+        localStorage.setItem("angel_primary_model", "gemini-3.8-flash");
+      }
+    } catch {}
 
     // Sync legacy geminiKey if needed
     const gemini = merged.find((p) => p.id === "gemini");
@@ -342,8 +375,13 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
     if (provider.id === "gemini") {
       if (!activeKey) return { ok: false, message: "Gemini API key is required" };
       const ai = new GoogleGenAI({ apiKey: activeKey });
+      const rawTarget = (provider.defaultModel || "gemini-3.8-flash").replace(/^(models\/)+/, "").trim();
+      const targetModel =
+        rawTarget.includes("2.5") || rawTarget.includes("3.5") || rawTarget.includes("2.0") || rawTarget.includes("1.5")
+          ? "gemini-3.8-flash"
+          : rawTarget;
       await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: targetModel,
         contents: "Respond with 'ok'",
       });
       const latencyMs = Math.round(performance.now() - startTime);
@@ -664,7 +702,7 @@ Return ONLY valid JSON with exact keys:
 Never use destructive commands (rm, del, format).`;
 
       const res = await ai.models.generateContent({
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         contents: forgePrompt,
       });
       const cleanJson = (res.text || "").replace(/```json|```/g, "").trim();
@@ -786,7 +824,25 @@ Never use destructive commands (rm, del, format).`;
       });
     }
 
-    const ladder = [provider.defaultModel || "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    const cleanModelName = (m: string) => m.replace(/^(models\/)+/, "").trim();
+    const ladder = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
+    if (provider.defaultModel) {
+      const customModel = cleanModelName(provider.defaultModel);
+      if (
+        !customModel.includes("2.5") &&
+        !customModel.includes("3.5") &&
+        !customModel.includes("2.0") &&
+        !customModel.includes("1.5")
+      ) {
+        if (!ladder.includes(customModel)) {
+          ladder.unshift(customModel);
+        } else {
+          const idx = ladder.indexOf(customModel);
+          ladder.splice(idx, 1);
+          ladder.unshift(customModel);
+        }
+      }
+    }
 
     // Try keys sequentially if 429 occurs
     for (const apiKey of candidateKeys) {
@@ -798,7 +854,7 @@ Never use destructive commands (rm, del, format).`;
           let firstSentenceSpoken = false;
 
           const responseStream = await ai.models.generateContentStream({
-            model,
+            model: cleanModelName(model),
             contents: contentParts,
             config: { systemInstruction },
           });

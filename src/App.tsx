@@ -91,7 +91,20 @@ export default function App() {
 
   // AI Model Ladder Selector
   const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return localStorage.getItem("angel_primary_model") || "Auto";
+    const saved = localStorage.getItem("angel_primary_model");
+    if (
+      saved &&
+      (saved.includes("2.5") ||
+        saved.includes("3.5") ||
+        saved.includes("2.0") ||
+        saved.includes("1.5") ||
+        saved === "gemini-2.5-flash" ||
+        saved === "gemini-3.5-flash-lite")
+    ) {
+      localStorage.setItem("angel_primary_model", "gemini-3.8-flash");
+      return "gemini-3.8-flash";
+    }
+    return saved || "Auto";
   });
   const [showModelDropdown, setShowModelDropdown] = useState(false);
 
@@ -729,7 +742,7 @@ export default function App() {
                     <div className="absolute bottom-12 right-0 w-56 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs max-h-72 overflow-y-auto">
                       {[
                         { id: "Auto", label: "Auto Smart Router" },
-                        { id: "gemini", label: "Google Gemini 3.5" },
+                        { id: "gemini", label: "Google Gemini 3.8 Flash" },
                         { id: "groq", label: "Groq Llama 3.3 70B" },
                         { id: "deepseek", label: "DeepSeek V3" },
                         { id: "openai", label: "OpenAI GPT-4o" },

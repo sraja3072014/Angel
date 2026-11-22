@@ -224,7 +224,20 @@ export function MenuControlCenterWindow({
     return found ? found.id : "gemini";
   });
   const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return localStorage.getItem("angel_primary_model") || "Auto";
+    const saved = localStorage.getItem("angel_primary_model");
+    if (
+      saved &&
+      (saved.includes("2.5") ||
+        saved.includes("3.5") ||
+        saved.includes("2.0") ||
+        saved.includes("1.5") ||
+        saved === "gemini-2.5-flash" ||
+        saved === "gemini-3.5-flash-lite")
+    ) {
+      localStorage.setItem("angel_primary_model", "gemini-3.8-flash");
+      return "gemini-3.8-flash";
+    }
+    return saved || "Auto";
   });
   const [toolCalling, setToolCalling] = useState<boolean>(() => {
     return localStorage.getItem("angel_tool_calling") !== "false";
