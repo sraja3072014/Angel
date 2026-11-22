@@ -36,7 +36,8 @@ import {
 import "./App.css";
 import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
 import { AngelVoiceEngine } from "./services/voiceEngine";
-import { SettingsDrawer } from "./components/SettingsDrawer";
+import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
+import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
 import { HoloEarthStage } from "./components/HoloEarthStage";
 import { GeminiSidebar } from "./components/GeminiSidebar";
 
@@ -66,7 +67,7 @@ export default function App() {
 
   // Layout & Navigation State
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [activeModal, setActiveModal] = useState<{ type: "menu" | "security"; tab: string } | null>(null);
   const [showGetAppModal, setShowGetAppModal] = useState(false);
   const [temporaryChat, setTemporaryChat] = useState(false);
 
@@ -164,13 +165,9 @@ export default function App() {
     };
   }, []);
 
-  // Open dedicated K7 Security Suite window
-  const handleOpenSecuritySuite = async (tab: string = "antivirus") => {
-    try {
-      await invoke("open_security_suite", { initialTab: tab });
-    } catch (err) {
-      console.warn("Failed to open security suite window:", err);
-    }
+  // Open dedicated K7 Security Suite glass modal overlay
+  const handleOpenSecuritySuite = (tab: string = "antivirus") => {
+    setActiveModal({ type: "security", tab });
   };
 
   // Click-to-Toggle Microphone: First click starts, Second click stops
@@ -341,8 +338,7 @@ export default function App() {
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         onNewChat={handleNewChat}
-        onOpenSettings={() => setShowSettings(true)}
-        onOpenMenu={() => invoke("open_menu_window", { initialTab: "general" })}
+        onOpenMenu={() => setActiveModal({ type: "menu", tab: "general" })}
         onOpenSecuritySuite={() => handleOpenSecuritySuite("antivirus")}
         onSelectPrompt={(p) => handleSendMessage(p)}
       />
@@ -379,7 +375,7 @@ export default function App() {
           <div className="flex items-center gap-2">
             {/* Master Control Center Menu Button */}
             <button
-              onClick={() => invoke("open_menu_window", { initialTab: "general" })}
+              onClick={() => setActiveModal({ type: "menu", tab: "general" })}
               title="Open 12-Module Master Control Center"
               className="px-3 py-1.5 rounded-full bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-xs font-bold text-cyan-200 flex items-center gap-1.5 transition shadow-[0_0_12px_rgba(0,240,255,0.15)]"
             >
@@ -835,19 +831,29 @@ export default function App() {
         </main>
       </div>
 
-      {/* Settings Drawer Modal */}
-      {showSettings && (
-        <SettingsDrawer
-          onClose={() => setShowSettings(false)}
-          onSyncCloud={() => brain.syncWithSupabase()}
-          onTestVoice={() =>
-            voiceRef.current?.speak(
-              "Hello Raja, Angel neural voice system is operational.",
-              () => setSpeaking(true),
-              () => setSpeaking(false)
-            )
-          }
-        />
+      {/* 12-Tab Master Control Center Glass Modal Overlay */}
+      {activeModal?.type === "menu" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5 bg-black/70 backdrop-blur-xl animate-in fade-in duration-150">
+          <div className="w-full h-full max-w-6xl max-h-[92vh] rounded-3xl overflow-hidden shadow-2xl border border-cyan-400/40 relative">
+            <MenuControlCenterWindow
+              initialTab={activeModal.tab}
+              onClose={() => setActiveModal(null)}
+              onOpenSecurity={(tab) => setActiveModal({ type: "security", tab })}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* K7 Security & OS Doctor Suite Glass Modal Overlay */}
+      {activeModal?.type === "security" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5 bg-black/70 backdrop-blur-xl animate-in fade-in duration-150">
+          <div className="w-full h-full max-w-5xl max-h-[92vh] rounded-3xl overflow-hidden shadow-2xl border border-cyan-400/40 relative">
+            <SecuritySuiteWindow
+              initialTab={activeModal.tab}
+              onClose={() => setActiveModal(null)}
+            />
+          </div>
+        </div>
       )}
 
       {/* Get App Companion Modal */}

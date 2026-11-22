@@ -22,8 +22,6 @@ import {
   Usb,
   EyeOff,
   FolderLock,
-  Minus,
-  Square,
   X,
   Cpu,
   Flame,
@@ -85,9 +83,10 @@ interface DiagnosticReport {
 
 interface SecuritySuiteProps {
   initialTab?: string;
+  onClose?: () => void;
 }
 
-export function SecuritySuiteWindow({ initialTab = "antivirus" }: SecuritySuiteProps) {
+export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: SecuritySuiteProps) {
   const [activeTab, setActiveTab] = useState<string>(initialTab);
   const [subTab, setSubTab] = useState<"quick" | "deep" | "vault">("quick");
 
@@ -428,21 +427,15 @@ export function SecuritySuiteWindow({ initialTab = "antivirus" }: SecuritySuiteP
   }, [networkApps, appFilter]);
 
   // Window control helpers
-  const handleMinimize = () => {
-    try {
-      getCurrentWebviewWindow().minimize();
-    } catch {}
-  };
-  const handleMaximize = () => {
-    try {
-      getCurrentWebviewWindow().toggleMaximize();
-    } catch {}
-  };
   const handleClose = () => {
-    try {
-      getCurrentWebviewWindow().close();
-    } catch {
-      window.close();
+    if (onClose) {
+      onClose();
+    } else {
+      try {
+        getCurrentWebviewWindow().close();
+      } catch {
+        window.close();
+      }
     }
   };
 
@@ -475,25 +468,12 @@ export function SecuritySuiteWindow({ initialTab = "antivirus" }: SecuritySuiteP
           <div className="flex items-center gap-2">
             <span className="text-[11px] font-mono text-cyan-300/80 mr-2">{clock}</span>
             <button
-              onClick={handleMinimize}
-              title="Minimize"
-              className="p-1 rounded hover:bg-white/10 text-slate-300 hover:text-white transition"
-            >
-              <Minus size={14} />
-            </button>
-            <button
-              onClick={handleMaximize}
-              title="Maximize"
-              className="p-1 rounded hover:bg-white/10 text-slate-300 hover:text-white transition"
-            >
-              <Square size={12} />
-            </button>
-            <button
               onClick={handleClose}
-              title="Close Security Suite"
-              className="p-1 rounded hover:bg-rose-600 text-slate-300 hover:text-white transition"
+              title="Back to Angel AI"
+              className="px-3 py-1 rounded-md bg-cyan-500/20 hover:bg-rose-600/80 border border-cyan-400/40 text-cyan-200 hover:text-white text-xs font-bold flex items-center gap-1.5 transition"
             >
               <X size={14} />
+              <span>Back to Angel AI</span>
             </button>
           </div>
         </div>

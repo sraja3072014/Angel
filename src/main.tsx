@@ -1,8 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
-import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import "./App.css";
 
 interface ErrorBoundaryProps {
@@ -61,25 +59,10 @@ class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
   }
 }
 
-const searchStr =
-  window.location.search ||
-  (window.location.hash.includes("?")
-    ? window.location.hash.slice(window.location.hash.indexOf("?"))
-    : "");
-const urlParams = new URLSearchParams(searchStr);
-const windowType = urlParams.get("window");
-const initialTab = urlParams.get("tab") || undefined;
-
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      {windowType === "security" ? (
-        <SecuritySuiteWindow initialTab={initialTab || "antivirus"} />
-      ) : windowType === "menu" ? (
-        <MenuControlCenterWindow initialTab={initialTab || "general"} />
-      ) : (
-        <App />
-      )}
+      <App />
     </RootErrorBoundary>
   </React.StrictMode>,
 );

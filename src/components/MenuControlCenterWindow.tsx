@@ -15,8 +15,6 @@ import {
   ShieldCheck,
   Stethoscope,
   BarChart3,
-  Minus,
-  Square,
   X,
   CheckCircle2,
   Trash2,
@@ -34,6 +32,7 @@ import {
   Clock,
   ExternalLink,
   Volume2,
+  Cloud,
 } from "lucide-react";
 import {
   loadAngelConfig,
@@ -43,10 +42,23 @@ import {
   UsageTelemetry,
   MemoryFact,
   RelayCommand,
+  cloudBrain,
 } from "../services/cloudBrain";
 
 interface MenuControlCenterProps {
   initialTab?: string;
+  onClose?: () => void;
+  onOpenSecurity?: (tab: string) => void;
+}
+
+function normalizeTab(tab?: string): string {
+  if (!tab) return "general";
+  const lower = tab.toLowerCase();
+  if (lower === "keys" || lower === "apikeys") return "api_keys";
+  if (lower === "learning") return "memory";
+  if (lower === "forge") return "skills";
+  if (lower === "antivirus" || lower === "firewall") return "security";
+  return tab;
 }
 
 interface SkillItem {
@@ -59,9 +71,19 @@ interface SkillItem {
   status: "active" | "standby";
 }
 
-export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlCenterProps) {
-  const [activeTab, setActiveTab] = useState<string>(initialTab);
+export function MenuControlCenterWindow({
+  initialTab = "general",
+  onClose,
+  onOpenSecurity,
+}: MenuControlCenterProps) {
+  const [activeTab, setActiveTab] = useState<string>(() => normalizeTab(initialTab));
   const [statusMessage, setStatusMessage] = useState<string>("");
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(normalizeTab(initialTab));
+    }
+  }, [initialTab]);
 
   // Window title clock
   const [clock, setClock] = useState<string>("");
@@ -110,21 +132,15 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
   }, []);
 
   // Window frame controls
-  const handleMinimize = () => {
-    try {
-      getCurrentWebviewWindow().minimize();
-    } catch {}
-  };
-  const handleMaximize = () => {
-    try {
-      getCurrentWebviewWindow().toggleMaximize();
-    } catch {}
-  };
   const handleClose = () => {
-    try {
-      getCurrentWebviewWindow().close();
-    } catch {
-      window.close();
+    if (onClose) {
+      onClose();
+    } else {
+      try {
+        getCurrentWebviewWindow().close();
+      } catch {
+        window.close();
+      }
     }
   };
 
@@ -237,6 +253,18 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
         setCloudTestStatus("API key verification failed. Please check key validity.");
       }
     }, 1200);
+  };
+
+  const handleSyncCloud = async () => {
+    setCloudTestStatus("Syncing memories with Supabase cloud database...");
+    try {
+      const res = await cloudBrain.syncWithSupabase();
+      setCloudTestStatus(res.message);
+      showToast(res.message);
+    } catch (err: any) {
+      setCloudTestStatus(`Cloud Sync error: ${err?.message || err}`);
+      showToast(`Cloud Sync error: ${err?.message || err}`);
+    }
   };
 
   // ==========================================
@@ -702,6 +730,10 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
   };
 
   const handleOpenStandaloneSecurity = async () => {
+    if (onOpenSecurity) {
+      onOpenSecurity("antivirus");
+      return;
+    }
     try {
       await invoke("open_security_suite", { initialTab: "antivirus" });
     } catch (e: any) {
@@ -827,25 +859,12 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
               <span>{clock}</span>
             </span>
             <button
-              onClick={handleMinimize}
-              title="Minimize"
-              className="p-1 rounded-md hover:bg-white/10 text-slate-300 hover:text-white transition"
-            >
-              <Minus size={14} />
-            </button>
-            <button
-              onClick={handleMaximize}
-              title="Maximize"
-              className="p-1 rounded-md hover:bg-white/10 text-slate-300 hover:text-white transition"
-            >
-              <Square size={12} />
-            </button>
-            <button
               onClick={handleClose}
-              title="Close Control Center"
-              className="p-1 rounded-md hover:bg-rose-600 text-slate-300 hover:text-white transition"
+              title="Back to Angel AI"
+              className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-rose-600/80 border border-cyan-400/40 text-cyan-200 hover:text-white text-xs font-bold flex items-center gap-1.5 transition"
             >
               <X size={14} />
+              <span>Back to Angel AI</span>
             </button>
           </div>
         </div>
@@ -1252,7 +1271,7 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
                   </div>
                 )}
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <button
                     onClick={handleSaveApiKeys}
                     className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition"
@@ -1267,6 +1286,14 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
                   >
                     <RefreshCw size={14} />
                     <span>Test Connection</span>
+                  </button>
+
+                  <button
+                    onClick={handleSyncCloud}
+                    className="px-4 py-2.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/40 text-indigo-200 font-semibold text-xs flex items-center gap-2 transition"
+                  >
+                    <Cloud size={14} />
+                    <span>One-Click Cloud Sync</span>
                   </button>
                 </div>
               </div>
