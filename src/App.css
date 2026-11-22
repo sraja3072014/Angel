@@ -1,10 +1,22 @@
 @import "tailwindcss";
 
 html, body, #root {
+  background-color: transparent !important;
   background: transparent !important;
+  color-scheme: dark;
   margin: 0;
   padding: 0;
   overflow: hidden;
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background-color: #020617;
+}
+
+body:has([data-tauri-drag-region]) {
+  background-color: transparent !important;
 }
 
 /* 1. Brahma AI Zero-Gravity Idle Hover & Breathing */

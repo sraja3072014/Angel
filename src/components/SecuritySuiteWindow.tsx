@@ -112,13 +112,28 @@ export function SecuritySuiteWindow({ initialTab = "antivirus" }: SecuritySuiteP
 
   // Listen for tab switches dispatched from backend or main window
   useEffect(() => {
-    const unlisten = listen<string>("security-suite-switch-tab", (event) => {
-      if (event.payload) {
+    let unlistenFn: (() => void) | null = null;
+    let isMounted = true;
+
+    listen<string>("security-suite-switch-tab", (event) => {
+      if (isMounted && event.payload) {
         setActiveTab(event.payload);
       }
-    });
+    })
+      .then((unlisten) => {
+        if (isMounted) {
+          unlistenFn = unlisten;
+        } else {
+          unlisten();
+        }
+      })
+      .catch((err) => {
+        console.warn("security-suite-switch-tab listener registration error:", err);
+      });
+
     return () => {
-      unlisten.then((f) => f());
+      isMounted = false;
+      if (unlistenFn) unlistenFn();
     };
   }, []);
 
@@ -214,9 +229,11 @@ export function SecuritySuiteWindow({ initialTab = "antivirus" }: SecuritySuiteP
   };
 
   useEffect(() => {
-    refreshVault();
-    refreshFirewall();
-    refreshDoctor();
+    try {
+      refreshVault().catch(() => {});
+      refreshFirewall().catch(() => {});
+      refreshDoctor().catch(() => {});
+    } catch {}
   }, []);
 
   // Quick / Deep Scan Handlers

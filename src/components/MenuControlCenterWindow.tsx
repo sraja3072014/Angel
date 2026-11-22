@@ -84,13 +84,28 @@ export function MenuControlCenterWindow({ initialTab = "general" }: MenuControlC
 
   // Listen for tab switches dispatched by backend or other windows
   useEffect(() => {
-    const unlisten = listen<string>("menu-center-switch-tab", (event) => {
-      if (event.payload) {
+    let unlistenFn: (() => void) | null = null;
+    let isMounted = true;
+
+    listen<string>("menu-center-switch-tab", (event) => {
+      if (isMounted && event.payload) {
         setActiveTab(event.payload);
       }
-    });
+    })
+      .then((unlisten) => {
+        if (isMounted) {
+          unlistenFn = unlisten;
+        } else {
+          unlisten();
+        }
+      })
+      .catch((err) => {
+        console.warn("menu-center-switch-tab listener registration error:", err);
+      });
+
     return () => {
-      unlisten.then((f) => f());
+      isMounted = false;
+      if (unlistenFn) unlistenFn();
     };
   }, []);
 

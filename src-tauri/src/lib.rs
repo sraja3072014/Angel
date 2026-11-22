@@ -337,18 +337,18 @@ fn set_auto_start(enable: bool) -> String {
 fn open_menu_window(app: tauri::AppHandle, initial_tab: Option<String>) -> Result<(), String> {
     let tab = initial_tab.unwrap_or_else(|| "general".to_string());
     if let Some(window) = app.get_webview_window("menu-center") {
-        let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("menu-center-switch-tab", &tab);
         return Ok(());
     }
 
-    let url_str = format!("index.html?window=menu&tab={}", tab);
+    let route = format!("/?window=menu&tab={}", tab);
     let builder = WebviewWindowBuilder::new(
         &app,
         "menu-center",
-        WebviewUrl::App(url_str.into()),
+        WebviewUrl::App(route.into()),
     )
     .title("Angel AI — Control Center")
     .inner_size(1060.0, 700.0)
@@ -368,18 +368,18 @@ fn open_menu_window(app: tauri::AppHandle, initial_tab: Option<String>) -> Resul
 fn open_security_suite(app: tauri::AppHandle, initial_tab: Option<String>) -> Result<(), String> {
     let tab = initial_tab.unwrap_or_else(|| "antivirus".to_string());
     if let Some(window) = app.get_webview_window("security-suite") {
-        let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.show();
         let _ = window.set_focus();
         let _ = window.emit("security-suite-switch-tab", &tab);
         return Ok(());
     }
 
-    let url_str = format!("index.html?window=security&tab={}", tab);
+    let route = format!("/?window=security&tab={}", tab);
     let builder = WebviewWindowBuilder::new(
         &app,
         "security-suite",
-        WebviewUrl::App(url_str.into()),
+        WebviewUrl::App(route.into()),
     )
     .title("Project Angel — K7 Security & OS Doctor Suite")
     .inner_size(960.0, 660.0)
