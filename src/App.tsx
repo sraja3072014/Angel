@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
-  PanelLeft,
   Clock,
   Plus,
   Search,
@@ -13,7 +12,6 @@ import {
   ChevronRight,
   ChevronDown,
   Mic,
-  Send,
   Image,
   Video,
   Music,
@@ -27,11 +25,12 @@ import {
   Copy,
   Check,
   X,
-  Radio,
   Smartphone,
   AlertTriangle,
   Minus,
-  Sliders,
+  MessageCircleDashed,
+  MessageSquare,
+  Cpu,
 } from "lucide-react";
 import "./App.css";
 import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
@@ -75,7 +74,7 @@ export default function App() {
   const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task">("chat");
 
   // AI Model Ladder Selector
-  const [selectedModel, setSelectedModel] = useState<string>("Auto • Gemini 3.5");
+  const [selectedModel, setSelectedModel] = useState<string>("Auto");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
 
   // Tools Selector
@@ -164,11 +163,6 @@ export default function App() {
       unlisten.then((f) => f());
     };
   }, []);
-
-  // Open dedicated K7 Security Suite glass modal overlay
-  const handleOpenSecuritySuite = (tab: string = "antivirus") => {
-    setActiveModal({ type: "security", tab });
-  };
 
   // Click-to-Toggle Microphone: First click starts, Second click stops
   const handleToggleMicrophone = async () => {
@@ -339,7 +333,6 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         onNewChat={handleNewChat}
         onOpenMenu={() => setActiveModal({ type: "menu", tab: "general" })}
-        onOpenSecuritySuite={() => handleOpenSecuritySuite("antivirus")}
         onSelectPrompt={(p) => handleSendMessage(p)}
       />
 
@@ -350,21 +343,9 @@ export default function App() {
           data-tauri-drag-region
           className="h-14 px-4 bg-slate-950/40 border-b border-white/10 backdrop-blur-xl flex items-center justify-between shrink-0 select-none"
         >
-          {/* Left branding */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              title="Toggle sidebar"
-              className="p-2 rounded-xl hover:bg-white/10 text-slate-300 hover:text-white transition"
-            >
-              <PanelLeft size={18} />
-            </button>
-
-            <span className="text-base font-extrabold tracking-wide text-white drop-shadow flex items-center gap-1.5">
-              <span className="text-cyan-400">✦</span> Angel AI
-            </span>
-
-            <span className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-cyan-200">
+          {/* Left side: clean live clock telemetry */}
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-cyan-200">
               <Clock size={12} className="text-cyan-400" />
               <span>{formattedTime}</span>
               <span className="text-slate-400 text-[10px]">• {formattedDate} (IST)</span>
@@ -373,16 +354,6 @@ export default function App() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
-            {/* Master Control Center Menu Button */}
-            <button
-              onClick={() => setActiveModal({ type: "menu", tab: "general" })}
-              title="Open 12-Module Master Control Center"
-              className="px-3 py-1.5 rounded-full bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-xs font-bold text-cyan-200 flex items-center gap-1.5 transition shadow-[0_0_12px_rgba(0,240,255,0.15)]"
-            >
-              <Sliders size={13} className="text-cyan-400" />
-              <span>Menu</span>
-            </button>
-
             {/* Get App Companion Button */}
             <button
               onClick={() => setShowGetAppModal(true)}
@@ -392,19 +363,23 @@ export default function App() {
               <span className="hidden sm:inline">Get app</span>
             </button>
 
-            {/* Turn on Temporary Chat Toggle Pill */}
-            <button
-              onClick={() => setTemporaryChat(!temporaryChat)}
-              title="Turn on temporary chat (messages are not saved to history)"
-              className={`px-3 py-1.5 rounded-full border text-xs font-bold flex items-center gap-1.5 transition ${
-                temporaryChat
-                  ? "bg-amber-500/20 border-amber-400/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.3)]"
-                  : "bg-white/5 border-white/10 hover:bg-white/10 text-slate-400"
-              }`}
-            >
-              <Radio size={12} className={temporaryChat ? "animate-pulse text-amber-400" : ""} />
-              <span>{temporaryChat ? "Temporary ON" : "Turn on temporary chat"}</span>
-            </button>
+            {/* Turn on Temporary Chat Compact Icon Button with Tooltip */}
+            <div className="relative group">
+              <button
+                onClick={() => setTemporaryChat(!temporaryChat)}
+                title="Turn on temporary chat"
+                className={`p-2 rounded-xl border text-xs font-bold transition flex items-center justify-center ${
+                  temporaryChat
+                    ? "bg-amber-500/20 border-amber-400/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]"
+                    : "bg-white/5 border-white/10 hover:bg-white/10 text-slate-400 hover:text-white"
+                }`}
+              >
+                <MessageCircleDashed size={15} className={temporaryChat ? "animate-pulse text-amber-400" : ""} />
+              </button>
+              <div className="absolute top-full mt-1.5 right-0 hidden group-hover:flex px-2.5 py-1 rounded-lg bg-slate-900 border border-white/15 text-[10px] text-slate-200 whitespace-nowrap shadow-xl z-50 pointer-events-none">
+                {temporaryChat ? "Temporary chat active" : "Turn on temporary chat"}
+              </div>
+            </div>
 
             {/* Window controls */}
             <div className="flex items-center gap-1 pl-2 border-l border-white/10">
@@ -470,34 +445,10 @@ export default function App() {
         <main className="flex-1 overflow-y-auto px-4 py-6 flex flex-col justify-between">
           {/* CASE A: No messages yet -> Clean Hero Greeting */}
           {messages.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center max-w-2xl mx-auto space-y-7 my-auto">
-              {/* Hero Greeting */}
-              <div className="space-y-2">
-                <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-md">
-                  Where should we start?
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-300/80 max-w-md mx-auto">
-                  Sovereign Windows 11 desktop AI companion. Chat, run multi-action system reflexes, or inspect security.
-                </p>
-              </div>
-
-              {/* Quick Suggestion Pills */}
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {[
-                  "Scan system for threats",
-                  "Turn volume to 80% & take screenshot",
-                  "Explain Rust async Tokio architecture",
-                  "Check Koduvai live weather report",
-                ].map((sugg, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSendMessage(sugg)}
-                    className="px-3.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 hover:text-white transition"
-                  >
-                    {sugg}
-                  </button>
-                ))}
-              </div>
+            <div className="flex-1 flex flex-col items-center justify-center text-center max-w-2xl mx-auto my-auto">
+              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-md">
+                Where should we start?
+              </h1>
             </div>
           ) : (
             /* CASE B: Conversation Stream */
@@ -562,11 +513,10 @@ export default function App() {
             </div>
           )}
 
-          {/* 4. MULTI-FEATURED TRANSLUCENT PROMPT COMPOSER */}
-          <div className="w-full max-w-3xl mx-auto mt-auto pt-2">
-            <div className="rounded-3xl bg-slate-900/60 border border-white/15 backdrop-blur-2xl shadow-[0_0_40px_rgba(0,240,255,0.12)] p-2.5 flex flex-col gap-2 relative">
-              {/* TOP ROW: Plus Menu + Tools + Text Input + Model + Mic + Send */}
-              <div className="flex items-center gap-2">
+          {/* 4. STREAMLINED TRANSLUCENT PROMPT COMPOSER */}
+          <div className="w-full max-w-3xl mx-auto mt-auto pt-2 space-y-2.5">
+            {/* CLOSED PROMPT BOX */}
+            <div className="rounded-3xl bg-slate-900/60 border border-white/15 backdrop-blur-2xl shadow-[0_0_40px_rgba(0,240,255,0.12)] p-2.5 flex items-center gap-2 relative">
                 {/* Plus Menu Button */}
                 <div className="relative">
                   <button
@@ -742,7 +692,7 @@ export default function App() {
 
                   {showModelDropdown && (
                     <div className="absolute bottom-12 right-0 w-48 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
-                      {["Auto • Gemini 3.5", "Gemini 3.5 Flash", "Gemini 3.5 Flash-Lite"].map((m, idx) => (
+                      {["Auto", "Gemini 3.5 Flash", "Gemini 3.5 Flash-Lite"].map((m, idx) => (
                         <button
                           key={idx}
                           onClick={() => {
@@ -782,52 +732,37 @@ export default function App() {
                 >
                   <Mic size={16} />
                 </button>
+              </div>
 
-                {/* Send Button */}
+              {/* EXTERNAL CHAT & TASK DYNAMIC MODE PILLS */}
+              <div className="flex items-center justify-center gap-2 pt-0.5">
                 <button
-                  onClick={() => handleSendMessage()}
-                  disabled={!input.trim() || isProcessing}
-                  title="Send message (Enter)"
-                  className="p-2.5 rounded-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-30 disabled:hover:bg-cyan-500 text-slate-950 transition flex items-center justify-center shrink-0 shadow-md shadow-cyan-500/30"
+                  onClick={() => setWorkspaceMode("chat")}
+                  className={`px-3.5 py-1 rounded-full text-xs font-bold transition flex items-center gap-1.5 ${
+                    workspaceMode === "chat"
+                      ? "bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 shadow-sm"
+                      : "bg-white/5 border border-white/10 text-slate-400 hover:text-white"
+                  }`}
                 >
-                  <Send size={15} />
+                  <MessageSquare size={13} />
+                  <span>Chat</span>
+                </button>
+                <button
+                  onClick={() => setWorkspaceMode("task")}
+                  className={`px-3.5 py-1 rounded-full text-xs font-bold transition flex items-center gap-1.5 ${
+                    workspaceMode === "task"
+                      ? "bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 shadow-sm"
+                      : "bg-white/5 border border-white/10 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <Cpu size={13} />
+                  <span>Task</span>
+                  {workspaceMode === "task" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  )}
                 </button>
               </div>
-
-              {/* BOTTOM ROW: Mode Switcher (Chat | Task) */}
-              <div className="flex items-center justify-between pt-1 border-t border-white/10 text-xs">
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => setWorkspaceMode("chat")}
-                    className={`px-3 py-1 rounded-full font-bold transition ${
-                      workspaceMode === "chat"
-                        ? "bg-cyan-500/25 border border-cyan-400/60 text-cyan-200 shadow-sm"
-                        : "text-slate-400 hover:text-white"
-                    }`}
-                  >
-                    Chat
-                  </button>
-                  <button
-                    onClick={() => setWorkspaceMode("task")}
-                    className={`px-3 py-1 rounded-full font-bold transition flex items-center gap-1.5 ${
-                      workspaceMode === "task"
-                        ? "bg-emerald-500/25 border border-emerald-400/60 text-emerald-200 shadow-sm"
-                        : "text-slate-400 hover:text-white"
-                    }`}
-                  >
-                    <span>Task</span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  </button>
-                </div>
-
-                <div className="text-[11px] text-slate-400 font-mono hidden sm:inline">
-                  {workspaceMode === "task"
-                    ? "OS Automation Reflexes Active (Rust CREATE_NO_WINDOW)"
-                    : "Conversational Multimodal AI"}
-                </div>
-              </div>
             </div>
-          </div>
         </main>
       </div>
 

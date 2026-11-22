@@ -6,11 +6,9 @@ import {
   Sparkles,
   CalendarClock,
   GraduationCap,
-  Shield,
   Sliders,
   MessageSquare,
   ChevronLeft,
-  ChevronRight,
   CheckCircle2,
 } from "lucide-react";
 
@@ -19,7 +17,6 @@ interface GeminiSidebarProps {
   onToggleCollapse: () => void;
   onNewChat: () => void;
   onOpenMenu?: () => void;
-  onOpenSecuritySuite: () => void;
   onSelectPrompt?: (prompt: string) => void;
   currentChatId?: string;
 }
@@ -29,7 +26,6 @@ export function GeminiSidebar({
   onToggleCollapse,
   onNewChat,
   onOpenMenu,
-  onOpenSecuritySuite,
   onSelectPrompt,
 }: GeminiSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -55,20 +51,36 @@ export function GeminiSidebar({
     >
       {/* Top Header & New Chat */}
       <div className="p-3 flex flex-col gap-3">
-        {/* Collapse toggle row */}
-        <div className="flex items-center justify-between">
+        {/* Brand Header with miniature rotating 3D Earth orb & collapse toggle */}
+        <div
+          onClick={onToggleCollapse}
+          className={`flex items-center justify-between rounded-xl hover:bg-white/5 cursor-pointer transition group ${
+            collapsed ? "p-1 justify-center" : "px-2 py-1.5"
+          }`}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            {/* Miniature 3D-styled rotating Earth orb */}
+            <div className="relative w-6 h-6 shrink-0 flex items-center justify-center">
+              <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-600 via-emerald-500 to-indigo-600 shadow-[0_0_10px_rgba(6,182,212,0.6)] flex items-center justify-center animate-[spin_12s_linear_infinite] border border-cyan-400/50">
+                <div className="w-2 h-2 rounded-full bg-emerald-300/50 blur-[0.5px]" />
+              </div>
+              {/* Orbital ring */}
+              <div className="absolute inset-0 rounded-full border border-cyan-300/40 rotate-45 scale-110 pointer-events-none" />
+            </div>
+
+            {!collapsed && (
+              <span className="text-sm font-extrabold tracking-wide text-white drop-shadow flex items-center gap-1.5">
+                <span className="text-cyan-400">✦</span> Angel AI
+              </span>
+            )}
+          </div>
+
           {!collapsed && (
-            <span className="text-[11px] font-mono tracking-widest text-slate-400 uppercase px-1">
-              Workspace
-            </span>
+            <div className="text-slate-400 group-hover:text-white transition p-1">
+              <ChevronLeft size={15} />
+            </div>
           )}
-          <button
-            onClick={onToggleCollapse}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition"
-          >
-            {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-          </button>
         </div>
 
         {/* New Chat Pill Button */}
@@ -143,54 +155,40 @@ export function GeminiSidebar({
 
           <button
             onClick={() => {
-              setActiveItem("student");
-              onSelectPrompt?.("Enter Student guided learning mode: Explain the core concepts of Rust and WebAssembly step-by-step.");
+              setActiveItem("education");
+              onSelectPrompt?.("Teach me step-by-step how Angel AI executes local Rust reflexes with zero terminal flashes.");
             }}
-            title="Student Learning"
+            title="Interactive Learning"
             className={`flex items-center gap-3 rounded-xl hover:bg-white/10 text-xs font-medium text-slate-300 hover:text-white transition ${
               collapsed ? "p-2.5 justify-center" : "px-3 py-2"
-            } ${activeItem === "student" ? "bg-white/10 text-white" : ""}`}
+            } ${activeItem === "education" ? "bg-white/10 text-white" : ""}`}
           >
-            <GraduationCap size={16} className="text-emerald-400 shrink-0" />
-            {!collapsed && <span>Student</span>}
+            <GraduationCap size={16} className="text-indigo-400 shrink-0" />
+            {!collapsed && <span>Learn</span>}
           </button>
         </nav>
 
-        {/* Quick Search Dropdown / Bar when expanded */}
-        {!collapsed && showSearchModal && (
-          <div className="p-2 rounded-xl bg-black/50 border border-white/10 space-y-1.5 animate-in fade-in duration-150">
+        {/* Quick Search Modal Popover */}
+        {showSearchModal && !collapsed && (
+          <div className="p-2.5 rounded-2xl bg-slate-900/90 border border-white/10 text-xs flex flex-col gap-2 animate-in fade-in duration-150">
             <input
               type="text"
-              placeholder="Filter recent chats..."
+              placeholder="Search conversations..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full px-2.5 py-1 text-xs rounded bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+              className="bg-black/40 border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-cyan-400"
             />
-            <div className="max-h-28 overflow-y-auto space-y-1">
-              {filteredChats.map((c) => (
-                <div
-                  key={c.id}
-                  onClick={() => {
-                    onSelectPrompt?.(`Load session: ${c.title}`);
-                    setShowSearchModal(false);
-                  }}
-                  className="px-2 py-1 text-[11px] rounded hover:bg-white/10 cursor-pointer text-slate-300 truncate"
-                >
-                  {c.title}
-                </div>
-              ))}
-            </div>
           </div>
         )}
 
-        {/* Recent Conversations List (when expanded) */}
+        {/* Recent Conversations List */}
         {!collapsed && (
-          <div className="mt-3 flex-1 flex flex-col overflow-hidden">
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-2 mb-1">
+          <div className="mt-2 flex flex-col gap-1 overflow-hidden">
+            <div className="text-[11px] font-mono tracking-wider text-slate-400 uppercase px-2 mb-1">
               Recent
             </div>
             <div className="flex flex-col gap-0.5 overflow-y-auto max-h-48 pr-1">
-              {recentChats.map((c) => (
+              {filteredChats.map((c) => (
                 <button
                   key={c.id}
                   onClick={() => onSelectPrompt?.(`Load conversation topic: ${c.title}`)}
@@ -207,28 +205,16 @@ export function GeminiSidebar({
 
       {/* Bottom Section */}
       <div className="p-3 border-t border-white/10 flex flex-col gap-1.5">
-        {/* Unified Master Control Center Launcher */}
+        {/* Unified Single Menu Button */}
         <button
           onClick={onOpenMenu}
-          title="Open Master Control Center (12 Modules)"
+          title="Open 12-Module Master Control Center"
           className={`flex items-center gap-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/30 text-cyan-200 text-xs font-bold transition ${
             collapsed ? "p-2.5 justify-center" : "px-3 py-2"
           }`}
         >
           <Sliders size={16} className="text-cyan-400 shrink-0" />
-          {!collapsed && <span className="truncate">Menu & Settings</span>}
-        </button>
-
-        {/* AI Antivirus & OS Doctor Launcher */}
-        <button
-          onClick={onOpenSecuritySuite}
-          title="Open K7 AI Antivirus & OS Doctor"
-          className={`flex items-center gap-3 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-400/30 text-emerald-200 text-xs font-bold transition ${
-            collapsed ? "p-2.5 justify-center" : "px-3 py-2"
-          }`}
-        >
-          <Shield size={16} className="text-emerald-400 shrink-0 animate-pulse" />
-          {!collapsed && <span className="truncate">AI Antivirus & Doctor</span>}
+          {!collapsed && <span className="truncate">Menu</span>}
         </button>
 
         {/* User Profile Badge */}
