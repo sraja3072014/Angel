@@ -43,6 +43,51 @@ export interface CloudBrainConfig {
 
 const CONFIG_STORAGE_KEY = "angel_tauri_config_v3";
 const MEMORY_STORAGE_KEY = "angel_ram_memory_v3";
+const TELEMETRY_STORAGE_KEY = "angel_usage_telemetry";
+
+export interface UsageTelemetry {
+  prompts_count: number;
+  estimated_tokens: number;
+  local_reflex_count: number;
+  total_savings_usd: number;
+  last_updated: string;
+}
+
+export function getUsageTelemetry(): UsageTelemetry {
+  try {
+    const raw = localStorage.getItem(TELEMETRY_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {
+    prompts_count: 0,
+    estimated_tokens: 0,
+    local_reflex_count: 0,
+    total_savings_usd: 0.0,
+    last_updated: new Date().toISOString(),
+  };
+}
+
+export function incrementUsageTelemetry(type: "prompt" | "reflex", tokenEstimate = 0) {
+  try {
+    const data = getUsageTelemetry();
+    if (type === "prompt") {
+      data.prompts_count += 1;
+      data.estimated_tokens += tokenEstimate > 0 ? tokenEstimate : 380;
+      data.total_savings_usd = Math.round((data.estimated_tokens / 1000) * 0.0015 * 1000) / 1000;
+    } else if (type === "reflex") {
+      data.local_reflex_count += 1;
+      data.total_savings_usd = Math.round((data.total_savings_usd + 0.002) * 1000) / 1000;
+    }
+    data.last_updated = new Date().toISOString();
+    localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+}
+
+export function resetUsageTelemetry() {
+  try {
+    localStorage.removeItem(TELEMETRY_STORAGE_KEY);
+  } catch {}
+}
 
 export function loadAngelConfig(): AngelConfig {
   try {
@@ -431,6 +476,8 @@ Multi-Action Sequential Execution Examples:
         if (!firstSentenceSpoken && options?.onFirstSentence && cleanReply) {
           options.onFirstSentence(cleanReply);
         }
+
+        incrementUsageTelemetry("prompt", Math.round(userPrompt.length * 0.75 + fullText.length * 0.75));
 
         return cleanReply;
       } catch {

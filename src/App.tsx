@@ -31,9 +31,10 @@ import {
   Smartphone,
   AlertTriangle,
   Minus,
+  Sliders,
 } from "lucide-react";
 import "./App.css";
-import { CloudBrainService } from "./services/cloudBrain";
+import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
 import { AngelVoiceEngine } from "./services/voiceEngine";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { HoloEarthStage } from "./components/HoloEarthStage";
@@ -229,6 +230,7 @@ export default function App() {
         try {
           const localRes = await invoke<string>("execute_os_reflex", { command: prompt });
           if (localRes !== "CLOUD_BRAIN") {
+            incrementUsageTelemetry("reflex");
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMsgId
@@ -340,6 +342,7 @@ export default function App() {
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
         onNewChat={handleNewChat}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenMenu={() => invoke("open_menu_window", { initialTab: "general" })}
         onOpenSecuritySuite={() => handleOpenSecuritySuite("antivirus")}
         onSelectPrompt={(p) => handleSendMessage(p)}
       />
@@ -374,6 +377,16 @@ export default function App() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
+            {/* Master Control Center Menu Button */}
+            <button
+              onClick={() => invoke("open_menu_window", { initialTab: "general" })}
+              title="Open 12-Module Master Control Center"
+              className="px-3 py-1.5 rounded-full bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-xs font-bold text-cyan-200 flex items-center gap-1.5 transition shadow-[0_0_12px_rgba(0,240,255,0.15)]"
+            >
+              <Sliders size={13} className="text-cyan-400" />
+              <span>Menu</span>
+            </button>
+
             {/* Get App Companion Button */}
             <button
               onClick={() => setShowGetAppModal(true)}
@@ -705,7 +718,7 @@ export default function App() {
                 {/* Main Input Field */}
                 <input
                   type="text"
-                  placeholder="Ask Gemini"
+                  placeholder="Ask Angel AI"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {

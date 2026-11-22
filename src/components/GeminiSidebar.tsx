@@ -8,6 +8,7 @@ import {
   GraduationCap,
   Shield,
   Settings,
+  Sliders,
   MessageSquare,
   ChevronLeft,
   ChevronRight,
@@ -19,6 +20,7 @@ interface GeminiSidebarProps {
   onToggleCollapse: () => void;
   onNewChat: () => void;
   onOpenSettings: () => void;
+  onOpenMenu?: () => void;
   onOpenSecuritySuite: () => void;
   onSelectPrompt?: (prompt: string) => void;
   currentChatId?: string;
@@ -29,6 +31,7 @@ export function GeminiSidebar({
   onToggleCollapse,
   onNewChat,
   onOpenSettings,
+  onOpenMenu,
   onOpenSecuritySuite,
   onSelectPrompt,
 }: GeminiSidebarProps) {
@@ -207,6 +210,18 @@ export function GeminiSidebar({
 
       {/* Bottom Section */}
       <div className="p-3 border-t border-white/10 flex flex-col gap-1.5">
+        {/* Master Control Center Launcher */}
+        <button
+          onClick={onOpenMenu || onOpenSettings}
+          title="Master Control Center (12 Modules)"
+          className={`flex items-center gap-3 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/30 text-cyan-200 text-xs font-bold transition ${
+            collapsed ? "p-2.5 justify-center" : "px-3 py-2"
+          }`}
+        >
+          <Sliders size={16} className="text-cyan-400 shrink-0" />
+          {!collapsed && <span className="truncate">Control Center</span>}
+        </button>
+
         {/* AI Antivirus & OS Doctor Launcher */}
         <button
           onClick={onOpenSecuritySuite}

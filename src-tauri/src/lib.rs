@@ -334,6 +334,37 @@ fn set_auto_start(enable: bool) -> String {
 }
 
 #[tauri::command]
+fn open_menu_window(app: tauri::AppHandle, initial_tab: Option<String>) -> Result<(), String> {
+    let tab = initial_tab.unwrap_or_else(|| "general".to_string());
+    if let Some(window) = app.get_webview_window("menu-center") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = window.emit("menu-center-switch-tab", &tab);
+        return Ok(());
+    }
+
+    let url_str = format!("index.html?window=menu&tab={}", tab);
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        "menu-center",
+        WebviewUrl::App(url_str.into()),
+    )
+    .title("Angel AI — Control Center")
+    .inner_size(1060.0, 700.0)
+    .min_inner_size(900.0, 600.0)
+    .transparent(true)
+    .decorations(false)
+    .resizable(true)
+    .center();
+
+    let window = builder.build().map_err(|e| format!("Failed to create menu window: {}", e))?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
 fn open_security_suite(app: tauri::AppHandle, initial_tab: Option<String>) -> Result<(), String> {
     let tab = initial_tab.unwrap_or_else(|| "antivirus".to_string());
     if let Some(window) = app.get_webview_window("security-suite") {
@@ -457,6 +488,7 @@ pub fn run() {
             execute_os_reflex,
             open_system_target,
             open_security_suite,
+            open_menu_window,
             set_auto_start,
             voice_bridge::offline_speech_to_text,
             voice_bridge::speak_offline_tts,
