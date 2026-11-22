@@ -73,6 +73,22 @@ export default function App() {
   // Workspace Mode: "chat" vs "task"
   const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task">("chat");
 
+  // Ambient Earth Opacity (defaults to 50%)
+  const [earthOpacity, setEarthOpacity] = useState<number>(() => {
+    const v = localStorage.getItem("angel_earth_opacity");
+    return v ? parseFloat(v) : 0.5;
+  });
+
+  useEffect(() => {
+    const handleEarthConfig = (e: any) => {
+      if (e.detail?.opacity !== undefined) {
+        setEarthOpacity(e.detail.opacity);
+      }
+    };
+    window.addEventListener("angel-earth-config", handleEarthConfig);
+    return () => window.removeEventListener("angel-earth-config", handleEarthConfig);
+  }, []);
+
   // AI Model Ladder Selector
   const [selectedModel, setSelectedModel] = useState<string>("Auto");
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -300,15 +316,19 @@ export default function App() {
     }
   };
 
-  // Window control helpers
-  const handleMinimize = () => {
+  // Window control helpers: Minimize to Tray & Complete Application Exit
+  const handleMinimize = async () => {
     try {
-      getCurrentWebviewWindow().minimize();
-    } catch {}
+      await invoke("minimize_to_tray");
+    } catch {
+      try {
+        getCurrentWebviewWindow().hide();
+      } catch {}
+    }
   };
-  const handleHideToTray = () => {
+  const handleClose = () => {
     try {
-      getCurrentWebviewWindow().hide();
+      getCurrentWebviewWindow().close();
     } catch {
       window.close();
     }
@@ -323,7 +343,10 @@ export default function App() {
   return (
     <div className="h-screen w-screen flex bg-slate-950 text-white select-none overflow-hidden font-sans relative">
       {/* 1. AMBIENT 3D SATELLITE EARTH BACKGROUND LAYER */}
-      <div className="fixed inset-0 z-0 pointer-events-none opacity-65 overflow-hidden">
+      <div
+        className="fixed inset-0 z-0 pointer-events-none overflow-hidden transition-opacity duration-300"
+        style={{ opacity: earthOpacity }}
+      >
         <HoloEarthStage speaking={speaking} listening={listening} />
       </div>
 
@@ -385,14 +408,14 @@ export default function App() {
             <div className="flex items-center gap-1 pl-2 border-l border-white/10">
               <button
                 onClick={handleMinimize}
-                title="Minimize"
+                title="Minimize to System Tray"
                 className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition"
               >
                 <Minus size={15} />
               </button>
               <button
-                onClick={handleHideToTray}
-                title="Minimize to System Tray"
+                onClick={handleClose}
+                title="Close Angel AI"
                 className="p-1.5 rounded-lg hover:bg-rose-600 text-slate-400 hover:text-white transition"
               >
                 <X size={15} />
@@ -766,10 +789,10 @@ export default function App() {
         </main>
       </div>
 
-      {/* 12-Tab Master Control Center Glass Modal Overlay */}
+      {/* Master Control Center Glass Modal Overlay */}
       {activeModal?.type === "menu" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5 bg-black/70 backdrop-blur-xl animate-in fade-in duration-150">
-          <div className="w-full h-full max-w-6xl max-h-[92vh] rounded-3xl overflow-hidden shadow-2xl border border-cyan-400/40 relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/75 backdrop-blur-xl animate-in fade-in duration-150">
+          <div className="w-full h-full max-w-6xl max-h-[92vh] rounded-3xl overflow-hidden shadow-2xl border border-cyan-400/40 relative flex flex-col">
             <MenuControlCenterWindow
               initialTab={activeModal.tab}
               onClose={() => setActiveModal(null)}

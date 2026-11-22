@@ -155,7 +155,14 @@ export function MenuControlCenterWindow({
   const [autoStart, setAutoStart] = useState<boolean>(true);
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
     const val = localStorage.getItem("angel_earth_opacity");
-    return val ? parseFloat(val) : 0.65;
+    return val ? parseFloat(val) : 0.5;
+  });
+  const [earthScale, setEarthScale] = useState<number>(() => {
+    const val = localStorage.getItem("angel_earth_scale");
+    return val ? parseFloat(val) : 1.0;
+  });
+  const [weatherFx, setWeatherFx] = useState<boolean>(() => {
+    return localStorage.getItem("angel_earth_weather_fx") !== "false";
   });
   const [earthSpeed, setEarthSpeed] = useState<number>(() => {
     const val = localStorage.getItem("angel_earth_speed");
@@ -164,9 +171,14 @@ export function MenuControlCenterWindow({
   const [showCelestial, setShowCelestial] = useState<boolean>(() => {
     return localStorage.getItem("angel_earth_show_celestial") !== "false";
   });
-  const [closeAction, setCloseAction] = useState<"tray" | "quit">(() => {
-    return (localStorage.getItem("angel_close_action") as "tray" | "quit") || "tray";
-  });
+
+  const dispatchEarthConfig = (scale: number, weather: boolean, opacity: number) => {
+    window.dispatchEvent(
+      new CustomEvent("angel-earth-config", {
+        detail: { scale, weatherFx: weather, opacity },
+      })
+    );
+  };
 
   const handleToggleAutoStart = async (enable: boolean) => {
     setAutoStart(enable);
@@ -180,9 +192,11 @@ export function MenuControlCenterWindow({
 
   const handleSaveGeneral = () => {
     localStorage.setItem("angel_earth_opacity", earthOpacity.toString());
+    localStorage.setItem("angel_earth_scale", earthScale.toString());
+    localStorage.setItem("angel_earth_weather_fx", weatherFx.toString());
     localStorage.setItem("angel_earth_speed", earthSpeed.toString());
     localStorage.setItem("angel_earth_show_celestial", showCelestial.toString());
-    localStorage.setItem("angel_close_action", closeAction);
+    dispatchEarthConfig(earthScale, weatherFx, earthOpacity);
     showToast("General preferences saved successfully!");
   };
 
@@ -845,12 +859,14 @@ export function MenuControlCenterWindow({
             <div className="p-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/40 text-cyan-300">
               <Sliders size={15} className="text-cyan-400 animate-pulse" />
             </div>
-            <span className="text-xs font-black tracking-widest text-cyan-200">
-              PROJECT ANGEL V3 • MASTER CONTROL CENTER
-            </span>
-            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 border border-cyan-500/40 text-cyan-300">
-              12-MODULE SUITE
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-black tracking-widest text-cyan-200">
+                ANGEL AI
+              </span>
+              <span className="text-xs font-semibold text-slate-400">
+                • Master Control Center
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -989,9 +1005,11 @@ export function MenuControlCenterWindow({
                   </div>
 
                   <div className="space-y-3">
+                    {/* Background Opacity (50% default) */}
                     <div>
                       <div className="flex justify-between text-xs text-slate-300 mb-1">
                         <span>Background Opacity: {Math.round(earthOpacity * 100)}%</span>
+                        <span className="text-[11px] text-slate-400 font-mono">Default: 50%</span>
                       </div>
                       <input
                         type="range"
@@ -999,9 +1017,55 @@ export function MenuControlCenterWindow({
                         max="1.0"
                         step="0.05"
                         value={earthOpacity}
-                        onChange={(e) => setEarthOpacity(parseFloat(e.target.value))}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setEarthOpacity(val);
+                          localStorage.setItem("angel_earth_opacity", val.toString());
+                          dispatchEarthConfig(earthScale, weatherFx, val);
+                        }}
                         className="w-full accent-cyan-400 bg-slate-800"
                       />
+                    </div>
+
+                    {/* Earth Size / Scale Slider (0.6x to 1.5x, default 1.0x) */}
+                    <div>
+                      <div className="flex justify-between text-xs text-slate-300 mb-1">
+                        <span>Earth Size / Scale: {earthScale.toFixed(2)}x</span>
+                        <span className="text-[11px] text-slate-400 font-mono">Range: 0.6x – 1.5x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.6"
+                        max="1.5"
+                        step="0.05"
+                        value={earthScale}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setEarthScale(val);
+                          localStorage.setItem("angel_earth_scale", val.toString());
+                          dispatchEarthConfig(val, weatherFx, earthOpacity);
+                        }}
+                        className="w-full accent-cyan-400 bg-slate-800"
+                      />
+                    </div>
+
+                    {/* Real-Time Global Weather FX Toggle */}
+                    <div className="flex items-center gap-3 pt-1">
+                      <input
+                        type="checkbox"
+                        id="weatherFx"
+                        checked={weatherFx}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setWeatherFx(val);
+                          localStorage.setItem("angel_earth_weather_fx", val.toString());
+                          dispatchEarthConfig(earthScale, val, earthOpacity);
+                        }}
+                        className="rounded accent-cyan-400"
+                      />
+                      <label htmlFor="weatherFx" className="text-xs text-slate-300 cursor-pointer">
+                        Real-Time Global Weather FX (Day/Night Solar Angle, Distant Storm Lightning & Polar Aurora Shimmer)
+                      </label>
                     </div>
 
                     <div>
@@ -1034,32 +1098,12 @@ export function MenuControlCenterWindow({
                   </div>
                 </div>
 
-                {/* Window Close Behavior */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
-                  <div className="text-sm font-semibold text-white">Window Close (X) Behavior</div>
-                  <div className="flex flex-col gap-2">
-                    <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="close_action"
-                        value="tray"
-                        checked={closeAction === "tray"}
-                        onChange={() => setCloseAction("tray")}
-                        className="accent-cyan-400"
-                      />
-                      <span>Minimize to System Tray (Keep 24/7 Sentry active — Recommended)</span>
-                    </label>
-                    <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="close_action"
-                        value="quit"
-                        checked={closeAction === "quit"}
-                        onChange={() => setCloseAction("quit")}
-                        className="accent-cyan-400"
-                      />
-                      <span>Quit Project Angel completely</span>
-                    </label>
+                {/* Window Controls Behavior */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
+                  <div className="text-sm font-semibold text-white">Window Controls Behavior</div>
+                  <div className="text-xs text-slate-400 space-y-1">
+                    <div>• <strong className="text-slate-200">- (Minimize):</strong> Hides Angel AI to the Windows System Tray, keeping background security sentries and the global <code className="text-cyan-400">Alt + Space</code> hotkey active.</div>
+                    <div>• <strong className="text-slate-200">X (Close):</strong> Cleanly terminates and exits the entire Angel AI application process.</div>
                   </div>
                 </div>
 

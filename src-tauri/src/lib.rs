@@ -129,6 +129,14 @@ fn get_angel_ram_mb() -> f64 {
     0.0
 }
 
+// Minimize to System Tray command (keeps background watcher and global Alt+Space hotkey alive)
+#[tauri::command]
+fn minimize_to_tray(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
 // 2. Sub-1ms Tier-1 Reflex & Instant System Commands (Zero Terminal Flash)
 #[tauri::command]
 fn execute_os_reflex(command: String) -> String {
@@ -475,16 +483,16 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
                 if window.label() == "main" {
-                    // Minimize to System Tray instead of terminating the background sentinels
-                    api.prevent_close();
-                    let _ = window.hide();
+                    // X button cleanly terminates and exits the entire Angel AI application
+                    window.app_handle().exit(0);
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
             get_angel_ram_mb,
+            minimize_to_tray,
             execute_os_reflex,
             open_system_target,
             open_security_suite,

@@ -204,16 +204,46 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     const cloudMesh = new THREE.Mesh(cloudGeo, cloudMat);
     earthGroup.add(cloudMesh);
 
-    // C. Holographic Grid Wireframe
-    const holoGridGeo = new THREE.SphereGeometry(1.162, 28, 28);
-    const holoGridMat = new THREE.MeshBasicMaterial({
-      color: 0x00f0ff,
-      wireframe: true,
+    // Dynamic Earth Scale & Live Weather FX State
+    let targetScale = parseFloat(localStorage.getItem("angel_earth_scale") || "1.0");
+    if (isNaN(targetScale) || targetScale < 0.5) targetScale = 1.0;
+    let weatherFxEnabled = localStorage.getItem("angel_earth_weather_fx") !== "false";
+    earthGroup.scale.set(targetScale, targetScale, targetScale);
+
+    // Procedural Storm Lightning Point Lights inside cloud clusters
+    const lightning1 = new THREE.PointLight(0xa5f3fc, 0, 1.9, 2);
+    lightning1.position.set(0.72, 0.35, 0.85);
+    earthGroup.add(lightning1);
+
+    const lightning2 = new THREE.PointLight(0xdbeafe, 0, 1.9, 2);
+    lightning2.position.set(-0.65, -0.28, 0.92);
+    earthGroup.add(lightning2);
+
+    // Soft Polar Aurora / Snow Shimmer at high latitudes
+    const auroraGeo = new THREE.RingGeometry(0.38, 0.58, 64);
+    const auroraMat = new THREE.MeshBasicMaterial({
+      color: 0x10b981,
       transparent: true,
-      opacity: 0.11,
+      opacity: 0.32,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
-    const holoGrid = new THREE.Mesh(holoGridGeo, holoGridMat);
-    earthGroup.add(holoGrid);
+    const auroraMesh = new THREE.Mesh(auroraGeo, auroraMat);
+    auroraMesh.rotation.x = Math.PI / 2;
+    auroraMesh.position.set(0, 1.08, 0);
+    earthGroup.add(auroraMesh);
+
+    // Listen for live config updates dispatched from Control Center
+    const onEarthConfig = (e: any) => {
+      if (e.detail?.scale !== undefined) {
+        targetScale = e.detail.scale;
+      }
+      if (e.detail?.weatherFx !== undefined) {
+        weatherFxEnabled = e.detail.weatherFx;
+      }
+    };
+    window.addEventListener("angel-earth-config", onEarthConfig);
 
     // 4. Orbiting 3D Moon on Inclined Orbit
     const moonGroup = new THREE.Group();
@@ -277,30 +307,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
     issStation.position.set(1.42, 0, 0);
     issGroup.add(issStation);
 
-    // 6. Two Outer Hologram Orbit Rings
-    const ring1Geo = new THREE.TorusGeometry(1.45, 0.011, 16, 120);
-    const ring1Mat = new THREE.MeshBasicMaterial({
-      color: 0x00f0ff,
-      transparent: true,
-      opacity: 0.65,
-    });
-    const orbitRing1 = new THREE.Mesh(ring1Geo, ring1Mat);
-    orbitRing1.rotation.x = 1.25;
-    orbitRing1.rotation.y = 0.2;
-    scene.add(orbitRing1);
-
-    const ring2Geo = new THREE.TorusGeometry(1.62, 0.008, 16, 120);
-    const ring2Mat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.35,
-    });
-    const orbitRing2 = new THREE.Mesh(ring2Geo, ring2Mat);
-    orbitRing2.rotation.x = 1.45;
-    orbitRing2.rotation.y = -0.35;
-    scene.add(orbitRing2);
-
-    // 7. Space Dust Particles
+    // 6. Space Dust Particles in Deep Space
     const starCount = 80;
     const starPos = new Float32Array(starCount * 3);
     for (let i = 0; i < starCount * 3; i += 3) {
@@ -350,7 +357,37 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
 
       earthMesh.rotation.y += baseSpin;
       cloudMesh.rotation.y += baseSpin * 1.35;
-      holoGrid.rotation.y += baseSpin * 1.15;
+
+      // Dynamic Earth scale lerping smoothly in real-time
+      earthGroup.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.08);
+
+      // Real-Time Global Weather FX: Storm Lightning & Polar Aurora Shimmer
+      if (weatherFxEnabled) {
+        // Distant storm lightning pulse 1
+        if (Math.random() < 0.02) {
+          lightning1.intensity = 2.4 + Math.random() * 2.0;
+        } else {
+          lightning1.intensity *= 0.72;
+          if (lightning1.intensity < 0.05) lightning1.intensity = 0;
+        }
+
+        // Distant storm lightning pulse 2
+        if (Math.random() < 0.015) {
+          lightning2.intensity = 2.2 + Math.random() * 2.0;
+        } else {
+          lightning2.intensity *= 0.68;
+          if (lightning2.intensity < 0.05) lightning2.intensity = 0;
+        }
+
+        // Polar Aurora shimmer
+        auroraMesh.visible = true;
+        auroraMat.opacity = 0.22 + 0.14 * Math.sin(Date.now() * 0.002);
+        auroraMesh.rotation.z += 0.002;
+      } else {
+        lightning1.intensity = 0;
+        lightning2.intensity = 0;
+        auroraMesh.visible = false;
+      }
 
       // Orbiting 3D Moon
       moonAngle += 0.001;
@@ -368,16 +405,8 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
       const beaconIntensity = (Math.sin(Date.now() * 0.008) + 1) * 0.5;
       beaconMat.color.setRGB(0, beaconIntensity, beaconIntensity);
 
-      // Rings and stars
-      orbitRing1.rotation.z += 0.005;
-      orbitRing2.rotation.z -= 0.003;
+      // Deep space background dust motion
       stars.rotation.y += 0.0005;
-
-      // Visual feedback colors
-      ring1Mat.color.setHex(
-        isSpeaking ? 0x10b981 : isListening ? 0xf43f5e : 0x00f0ff
-      );
-      holoGridMat.opacity = isSpeaking ? 0.24 : isListening ? 0.2 : 0.11;
 
       earthGroup.rotation.x += (mouse.y * 0.25 - earthGroup.rotation.x) * 0.05;
 
@@ -390,6 +419,7 @@ export function HoloEarthStage({ speaking, listening }: HoloEarthProps) {
       cancelAnimationFrame(animId);
       resizeObserver.disconnect();
       window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("angel-earth-config", onEarthConfig);
       renderer.dispose();
     };
   }, []);
