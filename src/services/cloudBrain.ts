@@ -727,6 +727,249 @@ export function saveAngelConfig(cfg: AngelConfig) {
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(cfg));
 }
 
+export interface CloudStorageConfig {
+  supabase: {
+    url: string;
+    anonKey: string;
+  };
+  discord: {
+    webhookUrl: string;
+    botToken: string;
+    channelId: string;
+  };
+  github: {
+    pat: string;
+    gistId: string;
+  };
+  custom: {
+    providerType: "s3" | "webdav" | "local_nas";
+    endpointUrl: string;
+    bucketOrFolder: string;
+    accessKey: string;
+  };
+}
+
+export const CLOUD_STORAGE_CONFIG_KEY = "angel_cloud_storage_config";
+
+export function loadCloudStorageConfig(): CloudStorageConfig {
+  const legacy = loadAngelConfig();
+  try {
+    const raw = localStorage.getItem(CLOUD_STORAGE_CONFIG_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        supabase: {
+          url: parsed.supabase?.url || legacy.supabaseUrl || "",
+          anonKey: parsed.supabase?.anonKey || legacy.supabaseKey || "",
+        },
+        discord: {
+          webhookUrl: parsed.discord?.webhookUrl || "",
+          botToken: parsed.discord?.botToken || "",
+          channelId: parsed.discord?.channelId || "",
+        },
+        github: {
+          pat: parsed.github?.pat || "",
+          gistId: parsed.github?.gistId || "",
+        },
+        custom: {
+          providerType: parsed.custom?.providerType || "s3",
+          endpointUrl: parsed.custom?.endpointUrl || "",
+          bucketOrFolder: parsed.custom?.bucketOrFolder || "",
+          accessKey: parsed.custom?.accessKey || "",
+        },
+      };
+    }
+  } catch {}
+
+  return {
+    supabase: {
+      url: legacy.supabaseUrl || "",
+      anonKey: legacy.supabaseKey || "",
+    },
+    discord: {
+      webhookUrl: "",
+      botToken: "",
+      channelId: "",
+    },
+    github: {
+      pat: "",
+      gistId: "",
+    },
+    custom: {
+      providerType: "s3",
+      endpointUrl: "",
+      bucketOrFolder: "",
+      accessKey: "",
+    },
+  };
+}
+
+export function saveCloudStorageConfig(cfg: CloudStorageConfig): void {
+  try {
+    localStorage.setItem(CLOUD_STORAGE_CONFIG_KEY, JSON.stringify(cfg));
+    const legacy = loadAngelConfig();
+    legacy.supabaseUrl = cfg.supabase.url.trim();
+    legacy.supabaseKey = cfg.supabase.anonKey.trim();
+    saveAngelConfig(legacy);
+  } catch (e) {
+    console.warn("Failed to save cloud storage config:", e);
+  }
+}
+
+/**
+ * Backup essential Angel AI data to GitHub Secret Gist
+ */
+export async function backupToGitHubGist(
+  pat: string,
+  existingGistId?: string
+): Promise<{ success: boolean; gistId: string; message: string }> {
+  if (!pat.trim()) {
+    throw new Error("GitHub Personal Access Token (PAT) is required for backup.");
+  }
+
+  const payload = {
+    angel_chat_sessions: localStorage.getItem("angel_chat_sessions") || "[]",
+    angel_memory: localStorage.getItem("angel_ram_memory_v3") || "{}",
+    angel_workshop_builds: localStorage.getItem("angel_workshop_builds") || "[]",
+    angel_ai_brain_config: localStorage.getItem("angel_ai_brain_config") || "{}",
+    backup_timestamp: new Date().toISOString(),
+    angel_version: "2.0.0",
+  };
+
+  const files = {
+    "angel_ai_full_backup.json": {
+      content: JSON.stringify(payload, null, 2),
+    },
+  };
+
+  const trimmedGistId = existingGistId?.trim();
+  const url = trimmedGistId
+    ? `https://api.github.com/gists/${trimmedGistId}`
+    : "https://api.github.com/gists";
+  const method = trimmedGistId ? "PATCH" : "POST";
+
+  const bodyData: any = {
+    description: "Angel AI Sovereign Multi-Cloud Storage Backup",
+    files,
+  };
+  if (!trimmedGistId) {
+    bodyData.public = false;
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${pat.trim()}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "User-Agent": "Angel-AI-Assistant",
+    },
+    body: JSON.stringify(bodyData),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`GitHub API Error (${res.status}): ${errText}`);
+  }
+
+  const json = await res.json();
+  const newGistId = json.id || trimmedGistId;
+  return {
+    success: true,
+    gistId: newGistId,
+    message: `Cloud backup stored to GitHub Secret Gist: ${newGistId}`,
+  };
+}
+
+/**
+ * Restore Angel AI data from GitHub Secret Gist
+ */
+export async function restoreFromGitHubGist(
+  pat: string,
+  gistId: string
+): Promise<{ success: boolean; message: string }> {
+  if (!pat.trim() || !gistId.trim()) {
+    throw new Error("Both GitHub PAT and Secret Gist ID are required to restore.");
+  }
+
+  const res = await fetch(`https://api.github.com/gists/${gistId.trim()}`, {
+    headers: {
+      Authorization: `Bearer ${pat.trim()}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "Angel-AI-Assistant",
+    },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`GitHub API Error (${res.status}): ${errText}`);
+  }
+
+  const json = await res.json();
+  const backupFile = json.files?.["angel_ai_full_backup.json"];
+  if (!backupFile || !backupFile.content) {
+    throw new Error("No 'angel_ai_full_backup.json' file found in this Gist.");
+  }
+
+  const restored = JSON.parse(backupFile.content);
+  if (restored.angel_chat_sessions) {
+    localStorage.setItem("angel_chat_sessions", restored.angel_chat_sessions);
+  }
+  if (restored.angel_memory) {
+    localStorage.setItem("angel_ram_memory_v3", restored.angel_memory);
+  }
+  if (restored.angel_workshop_builds) {
+    localStorage.setItem("angel_workshop_builds", restored.angel_workshop_builds);
+  }
+  if (restored.angel_ai_brain_config) {
+    localStorage.setItem("angel_ai_brain_config", restored.angel_ai_brain_config);
+  }
+
+  return {
+    success: true,
+    message: `Restored successfully from Gist (${restored.backup_timestamp || "Latest"}).`,
+  };
+}
+
+/**
+ * Test Discord remote bridge webhook via Rust backend proxy
+ */
+export async function testDiscordBridge(webhookUrl: string, botToken?: string): Promise<string> {
+  const trimmed = webhookUrl.trim();
+  if (!trimmed) {
+    throw new Error("Discord Webhook URL is required.");
+  }
+
+  const payload = {
+    content:
+      "🚀 **Angel AI — Remote PC Bridge Test**\n✅ Connection verified from Windows 11 host.\n⏱ Timestamp: " +
+      new Date().toLocaleString(),
+    embeds: [
+      {
+        title: "Angel AI System Telemetry & Remote Hub",
+        description: "Windows 11 Host Connected • Multi-Cloud Storage Hub Operational",
+        color: 0x06b6d4,
+        fields: [
+          { name: "Bridge Status", value: "🟢 Online", inline: true },
+          {
+            name: "Remote Commands",
+            value: botToken?.trim() ? "🤖 Bot Token Configured" : "📢 Webhook Uploads Only",
+            inline: true,
+          },
+          { name: "Sovereign Node", value: "Windows 11 PC", inline: true },
+        ],
+        footer: { text: "Angel AI Sovereign Multi-Cloud Storage & Remote Bridge" },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+
+  return await invoke<string>("send_discord_webhook", {
+    webhookUrl: trimmed,
+    message: JSON.stringify(payload),
+  });
+}
+
 export interface GeminiAskOptions {
   screenBase64?: string;
   onChunk?: (partialText: string) => void;

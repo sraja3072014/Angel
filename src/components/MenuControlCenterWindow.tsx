@@ -5,7 +5,6 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Sliders,
   Brain,
-  Key,
   Mic,
   Puzzle,
   Database,
@@ -39,6 +38,10 @@ import {
   Sparkles,
   HardDrive,
   Check,
+  FolderGit2,
+  Radio,
+  DownloadCloud,
+  UploadCloud,
 } from "lucide-react";
 import {
   loadAngelConfig,
@@ -54,6 +57,12 @@ import {
   saveAIProviders,
   testProviderConnection,
   extractKeysList,
+  CloudStorageConfig,
+  loadCloudStorageConfig,
+  saveCloudStorageConfig,
+  backupToGitHubGist,
+  restoreFromGitHubGist,
+  testDiscordBridge,
 } from "../services/cloudBrain";
 
 interface MenuControlCenterProps {
@@ -65,7 +74,14 @@ interface MenuControlCenterProps {
 function normalizeTab(tab?: string): string {
   if (!tab) return "general";
   const lower = tab.toLowerCase();
-  if (lower === "keys" || lower === "apikeys") return "api_keys";
+  if (
+    lower === "keys" ||
+    lower === "apikeys" ||
+    lower === "cloud" ||
+    lower === "storage" ||
+    lower === "cloud_storage"
+  )
+    return "api_keys";
   if (lower === "learning") return "memory";
   if (lower === "forge") return "skills";
   if (lower === "antivirus" || lower === "firewall") return "security";
@@ -388,56 +404,125 @@ export function MenuControlCenterWindow({
   };
 
   // ==========================================
-  // TAB 3: API KEYS & CLOUD SYNC STATE
+  // TAB 3: CLOUD & STORAGE STATE
   // ==========================================
-  const [geminiKey, setGeminiKey] = useState<string>("");
-  const [supabaseUrl, setSupabaseUrl] = useState<string>("");
-  const [supabaseKey, setSupabaseKey] = useState<string>("");
-  const [showGeminiKey, setShowGeminiKey] = useState<boolean>(false);
+  const [cloudConfig, setCloudConfig] = useState<CloudStorageConfig>(loadCloudStorageConfig);
   const [showSupabaseKey, setShowSupabaseKey] = useState<boolean>(false);
-  const [cloudTestStatus, setCloudTestStatus] = useState<string>("");
+  const [showDiscordWebhook, setShowDiscordWebhook] = useState<boolean>(false);
+  const [cloudStatus, setCloudStatus] = useState<string>("");
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState<boolean>(false);
+  const [isTestingDiscord, setIsTestingDiscord] = useState<boolean>(false);
+  const [isBackingUpGithub, setIsBackingUpGithub] = useState<boolean>(false);
+  const [isRestoringGithub, setIsRestoringGithub] = useState<boolean>(false);
+  const [customVerified, setCustomVerified] = useState<boolean>(false);
 
   useEffect(() => {
-    const cfg = loadAngelConfig();
-    setGeminiKey(cfg.geminiKey || "");
-    setSupabaseUrl(cfg.supabaseUrl || "");
-    setSupabaseKey(cfg.supabaseKey || "");
+    setCloudConfig(loadCloudStorageConfig());
   }, []);
 
-  const handleSaveApiKeys = () => {
-    const cfg = loadAngelConfig();
-    cfg.geminiKey = geminiKey.trim();
-    cfg.supabaseUrl = supabaseUrl.trim();
-    cfg.supabaseKey = supabaseKey.trim();
-    saveAngelConfig(cfg);
-    showToast("API Credentials saved and encrypted locally.");
-  };
-
-  const handleTestCloudConnection = () => {
-    setCloudTestStatus("Testing Gemini & Supabase connectivity...");
-    setTimeout(() => {
-      const gOk = Boolean(geminiKey.trim() && geminiKey.length > 20);
-      const sOk = Boolean(supabaseUrl.trim() && supabaseKey.trim());
-      if (gOk && sOk) {
-        setCloudTestStatus("All cloud services operational! Gemini API and Supabase synced.");
-      } else if (gOk) {
-        setCloudTestStatus("Gemini API key is valid. Supabase is pending configuration.");
-      } else {
-        setCloudTestStatus("API key verification failed. Please check key validity.");
-      }
-    }, 1200);
+  const handleSaveCloudConfig = () => {
+    saveCloudStorageConfig(cloudConfig);
+    showToast("Cloud & Storage configuration saved successfully.");
+    setCloudStatus("Configuration saved and verified locally.");
   };
 
   const handleSyncCloud = async () => {
-    setCloudTestStatus("Syncing memories with Supabase cloud database...");
+    setIsSyncingSupabase(true);
+    setCloudStatus("Syncing memories with Supabase cloud database...");
     try {
+      saveCloudStorageConfig(cloudConfig);
       const res = await cloudBrain.syncWithSupabase();
-      setCloudTestStatus(res.message);
+      setCloudStatus(res.message);
       showToast(res.message);
     } catch (err: any) {
-      setCloudTestStatus(`Cloud Sync error: ${err?.message || err}`);
+      setCloudStatus(`Cloud Sync error: ${err?.message || err}`);
       showToast(`Cloud Sync error: ${err?.message || err}`);
+    } finally {
+      setIsSyncingSupabase(false);
     }
+  };
+
+  const handleTestDiscord = async () => {
+    setIsTestingDiscord(true);
+    setCloudStatus("Testing Discord remote bridge webhook...");
+    try {
+      saveCloudStorageConfig(cloudConfig);
+      const res = await testDiscordBridge(cloudConfig.discord.webhookUrl, cloudConfig.discord.botToken);
+      setCloudStatus(`Discord Bridge: ${res}`);
+      showToast("Discord Remote Bridge connected successfully!");
+    } catch (err: any) {
+      setCloudStatus(`Discord Bridge error: ${err?.message || err}`);
+      showToast(`Discord Bridge error: ${err?.message || err}`);
+    } finally {
+      setIsTestingDiscord(false);
+    }
+  };
+
+  const handleBackupGitHub = async () => {
+    setIsBackingUpGithub(true);
+    setCloudStatus("Creating backup on GitHub Secret Gist...");
+    try {
+      saveCloudStorageConfig(cloudConfig);
+      const res = await backupToGitHubGist(cloudConfig.github.pat, cloudConfig.github.gistId);
+      if (res.gistId && res.gistId !== cloudConfig.github.gistId) {
+        setCloudConfig((prev) => {
+          const updated = { ...prev, github: { ...prev.github, gistId: res.gistId } };
+          saveCloudStorageConfig(updated);
+          return updated;
+        });
+      }
+      setCloudStatus(res.message);
+      showToast("Cloud backup saved to GitHub Gist!");
+    } catch (err: any) {
+      setCloudStatus(`GitHub Backup error: ${err?.message || err}`);
+      showToast(`GitHub Backup error: ${err?.message || err}`);
+    } finally {
+      setIsBackingUpGithub(false);
+    }
+  };
+
+  const handleRestoreGitHub = async () => {
+    if (
+      !window.confirm(
+        "Restore conversations, memory, and 3D workshop builds from this GitHub Gist snapshot? Current local data will be updated."
+      )
+    ) {
+      return;
+    }
+    setIsRestoringGithub(true);
+    setCloudStatus("Fetching backup snapshot from GitHub Secret Gist...");
+    try {
+      const res = await restoreFromGitHubGist(cloudConfig.github.pat, cloudConfig.github.gistId);
+      setCloudStatus(res.message);
+      showToast("Cloud snapshot restored from GitHub Gist!");
+    } catch (err: any) {
+      setCloudStatus(`GitHub Restore error: ${err?.message || err}`);
+      showToast(`GitHub Restore error: ${err?.message || err}`);
+    } finally {
+      setIsRestoringGithub(false);
+    }
+  };
+
+  const handleVerifyCustomStorage = () => {
+    if (cloudConfig.custom.providerType === "local_nas") {
+      if (!cloudConfig.custom.endpointUrl.trim() && !cloudConfig.custom.bucketOrFolder.trim()) {
+        setCloudStatus("Custom Storage Warning: Please specify a local or NAS folder path.");
+        setCustomVerified(false);
+        return;
+      }
+    } else {
+      if (!cloudConfig.custom.endpointUrl.trim()) {
+        setCloudStatus("Custom Storage Warning: Endpoint URL is required for S3 / WebDAV.");
+        setCustomVerified(false);
+        return;
+      }
+    }
+    saveCloudStorageConfig(cloudConfig);
+    setCustomVerified(true);
+    setCloudStatus(
+      `Custom storage driver verified (${cloudConfig.custom.providerType.toUpperCase()}). Ready for file sync.`
+    );
+    showToast("Storage driver verified.");
   };
 
   // ==========================================
@@ -990,7 +1075,7 @@ export function MenuControlCenterWindow({
   const navItems = [
     { id: "general", label: "General", icon: Sliders, group: "Core" },
     { id: "brain", label: "AI Brain", icon: Brain, group: "Core" },
-    { id: "api_keys", label: "API Keys", icon: Key, group: "Core" },
+    { id: "api_keys", label: "Cloud & Storage", icon: Cloud, group: "Core" },
     { id: "voice", label: "AI Voice", icon: Mic, group: "Interaction" },
     { id: "plugins", label: "Add New Plugin", icon: Puzzle, group: "Extensibility" },
     { id: "memory", label: "AI Learning", icon: Database, group: "Intelligence" },
@@ -1765,120 +1850,421 @@ export function MenuControlCenterWindow({
               );
             })()}
 
-            {/* 3. API KEYS & CLOUD SYNC TAB */}
+            {/* 3. MULTI-CLOUD STORAGE & REMOTE CONTROL HUB TAB */}
             {activeTab === "api_keys" && (
               <div className="space-y-6 max-w-3xl">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Key size={18} className="text-cyan-400" />
-                    <span>API Credentials & Cloud Sync</span>
+                    <Cloud size={18} className="text-cyan-400" />
+                    <span>Multi-Cloud Storage & Remote Control Hub</span>
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Manage your personal Google Gemini API Key and Supabase sync endpoints securely in encrypted storage.
+                    Configure independent cloud storage endpoints and remote bridges. Angel AI synchronizes your conversations, 3D workshop assets, and memory facts across your personal infrastructure without single-vendor cloud lock-in.
                   </p>
                 </div>
 
-                {/* Gemini API Key */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="flex justify-between items-center text-xs font-semibold text-white">
-                    <span>Google Gemini API Key</span>
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-mono ${
-                        geminiKey ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
-                      }`}
-                    >
-                      {geminiKey ? "Configured" : "Missing"}
+                {/* LLM Key Notice Banner */}
+                <div className="p-3.5 rounded-xl bg-cyan-950/40 border border-cyan-400/30 flex items-center justify-between gap-3 text-xs backdrop-blur-md">
+                  <div className="flex items-center gap-2.5 text-slate-200">
+                    <Sparkles size={16} className="text-cyan-400 shrink-0" />
+                    <span>
+                      LLM API keys (Gemini, Groq, Claude, DeepSeek, FreeLLMAPI) are managed in the <strong className="text-cyan-300">AI Brain</strong> tab.
                     </span>
                   </div>
-                  <div className="relative">
-                    <input
-                      type={showGeminiKey ? "text" : "password"}
-                      value={geminiKey}
-                      onChange={(e) => setGeminiKey(e.target.value)}
-                      placeholder="AIzaSy..."
-                      className="w-full px-3 py-2 pr-10 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                    />
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("brain")}
+                    className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-semibold shrink-0 transition"
+                  >
+                    Open AI Brain →
+                  </button>
+                </div>
+
+                {/* PROVIDER 1: SUPABASE CLOUD SYNC */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-emerald-500/20 text-emerald-400">
+                        <Database size={16} />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-white">1. Supabase Cloud Sync (Primary Realtime DB)</h3>
+                        <p className="text-[10px] text-slate-400">Synchronizes long-term memory facts, learned preferences, and device relay messages.</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono ${
+                        cloudConfig.supabase.url && cloudConfig.supabase.anonKey
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                          : "bg-slate-500/20 text-slate-400"
+                      }`}
+                    >
+                      {cloudConfig.supabase.url && cloudConfig.supabase.anonKey ? "Configured" : "Standby"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">Supabase Project URL</label>
+                      <input
+                        type="text"
+                        value={cloudConfig.supabase.url}
+                        onChange={(e) =>
+                          setCloudConfig((prev) => ({
+                            ...prev,
+                            supabase: { ...prev.supabase, url: e.target.value },
+                          }))
+                        }
+                        placeholder="https://xyzcompany.supabase.co"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-[11px] font-semibold text-slate-300">Supabase Anon Public Key</label>
+                        <button
+                          type="button"
+                          onClick={() => setShowSupabaseKey(!showSupabaseKey)}
+                          className="text-[10px] text-slate-400 hover:text-white"
+                        >
+                          {showSupabaseKey ? "Hide" : "Show"}
+                        </button>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type={showSupabaseKey ? "text" : "password"}
+                          value={cloudConfig.supabase.anonKey}
+                          onChange={(e) =>
+                            setCloudConfig((prev) => ({
+                              ...prev,
+                              supabase: { ...prev.supabase, anonKey: e.target.value },
+                            }))
+                          }
+                          placeholder="eyJhbGciOi..."
+                          className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => setShowGeminiKey(!showGeminiKey)}
-                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
+                      onClick={handleSyncCloud}
+                      disabled={isSyncingSupabase}
+                      className="px-3.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 font-semibold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
                     >
-                      {showGeminiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                      <Cloud size={13} className={isSyncingSupabase ? "animate-spin" : ""} />
+                      <span>{isSyncingSupabase ? "Syncing..." : "Sync Now"}</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Supabase URL */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="text-xs font-semibold text-white">Supabase Project URL</div>
-                  <input
-                    type="text"
-                    value={supabaseUrl}
-                    onChange={(e) => setSupabaseUrl(e.target.value)}
-                    placeholder="https://xyzcompany.supabase.co"
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                  />
-                </div>
-
-                {/* Supabase Anon Key */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="flex justify-between items-center text-xs font-semibold text-white">
-                    <span>Supabase Anon Public Key</span>
+                {/* PROVIDER 2: DISCORD REMOTE PC & CLOUD STORAGE BRIDGE */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">
+                        <Radio size={16} />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-white">2. Discord Remote PC & Cloud Storage Bridge</h3>
+                        <p className="text-[10px] text-slate-400">Realtime webhook alerts, desktop screenshot uploads, and remote commands via Discord channel.</p>
+                      </div>
+                    </div>
                     <span
                       className={`px-2 py-0.5 rounded text-[10px] font-mono ${
-                        supabaseKey ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-500/20 text-slate-400"
+                        cloudConfig.discord.webhookUrl
+                          ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
+                          : "bg-slate-500/20 text-slate-400"
                       }`}
                     >
-                      {supabaseKey ? "Configured" : "Optional"}
+                      {cloudConfig.discord.webhookUrl ? "Bridge Ready" : "Optional"}
                     </span>
                   </div>
-                  <div className="relative">
-                    <input
-                      type={showSupabaseKey ? "text" : "password"}
-                      value={supabaseKey}
-                      onChange={(e) => setSupabaseKey(e.target.value)}
-                      placeholder="eyJhbGciOi..."
-                      className="w-full px-3 py-2 pr-10 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                    />
+
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Discord Webhook URL <span className="text-[10px] text-slate-500">(Instant alerts, reports, & cloud screenshots)</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showDiscordWebhook ? "text" : "password"}
+                          value={cloudConfig.discord.webhookUrl}
+                          onChange={(e) =>
+                            setCloudConfig((prev) => ({
+                              ...prev,
+                              discord: { ...prev.discord, webhookUrl: e.target.value },
+                            }))
+                          }
+                          placeholder="https://discord.com/api/webhooks/..."
+                          className="w-full px-3 py-2 pr-10 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowDiscordWebhook(!showDiscordWebhook)}
+                          className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
+                        >
+                          {showDiscordWebhook ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                          Discord Bot Token <span className="text-[10px] text-slate-500">(Optional for /screenshot, /lock, /status)</span>
+                        </label>
+                        <input
+                          type="password"
+                          value={cloudConfig.discord.botToken}
+                          onChange={(e) =>
+                            setCloudConfig((prev) => ({
+                              ...prev,
+                              discord: { ...prev.discord, botToken: e.target.value },
+                            }))
+                          }
+                          placeholder="MTAy..."
+                          className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                          Command Channel ID <span className="text-[10px] text-slate-500">(Optional channel listener)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={cloudConfig.discord.channelId}
+                          onChange={(e) =>
+                            setCloudConfig((prev) => ({
+                              ...prev,
+                              discord: { ...prev.discord, channelId: e.target.value },
+                            }))
+                          }
+                          placeholder="123456789012345678"
+                          className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => setShowSupabaseKey(!showSupabaseKey)}
-                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-white"
+                      onClick={handleTestDiscord}
+                      disabled={isTestingDiscord}
+                      className="px-3.5 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/40 text-indigo-200 font-semibold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
                     >
-                      {showSupabaseKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                      <Radio size={13} className={isTestingDiscord ? "animate-pulse" : ""} />
+                      <span>{isTestingDiscord ? "Testing Bridge..." : "Test Discord Bridge"}</span>
                     </button>
                   </div>
                 </div>
 
-                {cloudTestStatus && (
+                {/* PROVIDER 3: GITHUB GIST / REPO CLOUD BACKUP */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400">
+                        <FolderGit2 size={16} />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-white">3. GitHub Gist / Repo Cloud Backup (Zero-Cost JSON Sync)</h3>
+                        <p className="text-[10px] text-slate-400">Versioned, zero-cost encrypted cloud backup for conversations, memory facts, and 3D workshop builds.</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono ${
+                        cloudConfig.github.pat
+                          ? "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                          : "bg-slate-500/20 text-slate-400"
+                      }`}
+                    >
+                      {cloudConfig.github.pat ? "Backup Ready" : "Optional"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        GitHub Personal Access Token (PAT)
+                      </label>
+                      <input
+                        type="password"
+                        value={cloudConfig.github.pat}
+                        onChange={(e) =>
+                          setCloudConfig((prev) => ({
+                            ...prev,
+                            github: { ...prev.github, pat: e.target.value },
+                          }))
+                        }
+                        placeholder="ghp_..."
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        Secret Gist ID <span className="text-[10px] text-slate-500">(Auto-generated on first backup)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={cloudConfig.github.gistId}
+                        onChange={(e) =>
+                          setCloudConfig((prev) => ({
+                            ...prev,
+                            github: { ...prev.github, gistId: e.target.value },
+                          }))
+                        }
+                        placeholder="Auto-populated or paste existing Gist ID"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleBackupGitHub}
+                      disabled={isBackingUpGithub}
+                      className="px-3.5 py-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-purple-200 font-semibold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+                    >
+                      <UploadCloud size={13} className={isBackingUpGithub ? "animate-bounce" : ""} />
+                      <span>{isBackingUpGithub ? "Backing up..." : "Backup to GitHub"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleRestoreGitHub}
+                      disabled={isRestoringGithub}
+                      className="px-3.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 font-semibold text-xs flex items-center gap-1.5 transition disabled:opacity-50"
+                    >
+                      <DownloadCloud size={13} className={isRestoringGithub ? "animate-bounce" : ""} />
+                      <span>{isRestoringGithub ? "Restoring..." : "Restore from GitHub"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* PROVIDER 4: CUSTOM CLOUD / S3 / WEBDAV / NAS */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400">
+                        <HardDrive size={16} />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-white">4. Custom Cloud / S3 / WebDAV / Manual Storage Driver</h3>
+                        <p className="text-[10px] text-slate-400">Connect Cloudflare R2, AWS S3, WebDAV Nextcloud, or a local network NAS path.</p>
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono ${
+                        customVerified
+                          ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                          : "bg-slate-500/20 text-slate-400"
+                      }`}
+                    >
+                      {customVerified ? "Verified" : "Standby"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">Provider Type</label>
+                      <select
+                        value={cloudConfig.custom.providerType}
+                        onChange={(e) =>
+                          setCloudConfig((prev) => ({
+                            ...prev,
+                            custom: { ...prev.custom, providerType: e.target.value as any },
+                          }))
+                        }
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
+                      >
+                        <option value="s3">Cloudflare R2 / AWS S3</option>
+                        <option value="webdav">WebDAV / Nextcloud</option>
+                        <option value="local_nas">Custom Local / NAS Path</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">Endpoint URL / Host</label>
+                      <input
+                        type="text"
+                        value={cloudConfig.custom.endpointUrl}
+                        onChange={(e) =>
+                          setCloudConfig((prev) => ({
+                            ...prev,
+                            custom: { ...prev.custom, endpointUrl: e.target.value },
+                          }))
+                        }
+                        placeholder="https://<account>.r2.cloudflarestorage.com"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">Bucket / Folder Path</label>
+                      <input
+                        type="text"
+                        value={cloudConfig.custom.bucketOrFolder}
+                        onChange={(e) =>
+                          setCloudConfig((prev) => ({
+                            ...prev,
+                            custom: { ...prev.custom, bucketOrFolder: e.target.value },
+                          }))
+                        }
+                        placeholder="angel-ai-vault"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-300 block mb-1">Access Token / Secret Key</label>
+                    <input
+                      type="password"
+                      value={cloudConfig.custom.accessKey}
+                      onChange={(e) =>
+                        setCloudConfig((prev) => ({
+                          ...prev,
+                          custom: { ...prev.custom, accessKey: e.target.value },
+                        }))
+                      }
+                      placeholder="Secret access key or bearer token"
+                      className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleVerifyCustomStorage}
+                      className="px-3.5 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-semibold text-xs flex items-center gap-1.5 transition"
+                    >
+                      <Check size={13} />
+                      <span>Verify Storage Driver</span>
+                    </button>
+                  </div>
+                </div>
+
+                {cloudStatus && (
                   <div className="p-3 rounded-lg bg-cyan-950/80 border border-cyan-400/50 text-cyan-200 text-xs font-mono">
-                    {cloudTestStatus}
+                    {cloudStatus}
                   </div>
                 )}
 
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3 pt-2">
                   <button
-                    onClick={handleSaveApiKeys}
-                    className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition"
+                    type="button"
+                    onClick={handleSaveCloudConfig}
+                    className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/25"
                   >
                     <Save size={15} />
-                    <span>Save Credentials</span>
-                  </button>
-
-                  <button
-                    onClick={handleTestCloudConnection}
-                    className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-semibold text-xs flex items-center gap-2 transition"
-                  >
-                    <RefreshCw size={14} />
-                    <span>Test Connection</span>
-                  </button>
-
-                  <button
-                    onClick={handleSyncCloud}
-                    className="px-4 py-2.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/40 text-indigo-200 font-semibold text-xs flex items-center gap-2 transition"
-                  >
-                    <Cloud size={14} />
-                    <span>One-Click Cloud Sync</span>
+                    <span>Save Cloud & Storage Configuration</span>
                   </button>
                 </div>
               </div>

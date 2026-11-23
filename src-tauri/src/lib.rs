@@ -471,6 +471,64 @@ async fn proxy_local_llm_request(
     .map_err(|e| format!("Task execution error: {e}"))?
 }
 
+#[tauri::command]
+async fn send_discord_webhook(
+    webhook_url: String,
+    message: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let trimmed_url = webhook_url.trim();
+        if !trimmed_url.starts_with("https://discord.com/api/webhooks/")
+            && !trimmed_url.starts_with("https://discordapp.com/api/webhooks/")
+        {
+            return Err("Invalid Discord Webhook URL. It must begin with https://discord.com/api/webhooks/".to_string());
+        }
+
+        let mut cmd = Command::new("curl.exe");
+
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        cmd.arg("-s").arg("-S");
+        cmd.arg("-X").arg("POST");
+        cmd.arg(trimmed_url);
+        cmd.arg("-H").arg("Content-Type: application/json");
+        cmd.arg("--data-binary").arg("@-");
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn curl: {e}"))?;
+
+        {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(message.as_bytes());
+            }
+        }
+
+        let output = child.wait_with_output().map_err(|e| format!("Request failed: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if !output.status.success() && stdout.trim().is_empty() {
+            return Err(if !stderr.trim().is_empty() {
+                stderr
+            } else {
+                format!("Curl exited with status: {}", output.status)
+            });
+        }
+
+        Ok(if stdout.trim().is_empty() {
+            "Message delivered successfully to Discord.".to_string()
+        } else {
+            stdout
+        })
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {e}"))?
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StlFilePayload {
     pub filename: String,
@@ -657,6 +715,7 @@ pub fn run() {
             plugin_forge::plugin_forge_delete,
             plugin_forge::plugin_forge_match_and_run,
             export_workshop_stl_files,
+            send_discord_webhook,
             os_doctor::get_system_health_report
         ])
         .run(tauri::generate_context!())
