@@ -521,13 +521,13 @@ export class AngelVoiceEngine {
   private async transcribeBlob(blob: Blob, mimeType: string) {
     const cfg = loadAngelConfig();
 
-    // 1. Google Gemini Multimodal Audio (Gemini 3.8 Flash / Flash-Lite / Pro)
+    // 1. Google Gemini Multimodal Audio (Gemini 2.5 Flash / 2.0 Flash / 2.5 Flash-Lite)
     if (navigator.onLine && cfg.geminiKey) {
       try {
         const base64Audio = await this.blobToBase64(blob);
         const ai = new GoogleGenAI({ apiKey: cfg.geminiKey });
         const cleanModelName = (m: string) => m.replace(/^(models\/)+/, "").trim();
-        const ladder = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
+        const ladder = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
 
         for (const model of ladder) {
           try {

@@ -422,6 +422,8 @@ async fn proxy_local_llm_request(
         cmd.creation_flags(CREATE_NO_WINDOW);
 
         cmd.arg("-s").arg("-S");
+        cmd.arg("-m").arg("8");
+        cmd.arg("--connect-timeout").arg("4");
         cmd.arg("-X").arg(if is_post { "POST" } else { "GET" });
         cmd.arg(&url);
 

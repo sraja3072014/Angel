@@ -118,17 +118,9 @@ export default function App() {
   // AI Model Ladder Selector
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     const saved = localStorage.getItem("angel_primary_model");
-    if (
-      saved &&
-      (saved.includes("2.5") ||
-        saved.includes("3.5") ||
-        saved.includes("2.0") ||
-        saved.includes("1.5") ||
-        saved === "gemini-2.5-flash" ||
-        saved === "gemini-3.5-flash-lite")
-    ) {
-      localStorage.setItem("angel_primary_model", "gemini-3.8-flash");
-      return "gemini-3.8-flash";
+    if (saved && (saved.includes("3.8") || saved === "gemini-3.8-flash")) {
+      localStorage.setItem("angel_primary_model", "gemini-2.5-flash");
+      return "gemini-2.5-flash";
     }
     return saved || "Auto";
   });
@@ -591,11 +583,11 @@ export default function App() {
         } catch {}
       }
 
-      // 2. Query Gemini/Cloud Brain with streaming and 25s timeout safeguard
+      // 2. Query Gemini/Cloud Brain with streaming and 45s timeout safeguard
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(
-          () => reject(new Error("AI response timed out after 25s. Check network connectivity or API key quota.")),
-          25000
+          () => reject(new Error("AI response timed out after 45s. Check network connectivity or API key quota.")),
+          45000
         )
       );
 
