@@ -22,6 +22,7 @@ import {
   GraduationCap,
   Eye,
   Volume2,
+  VolumeX,
   Copy,
   Check,
   X,
@@ -83,6 +84,20 @@ export default function App() {
   // Workspace Mode: "chat" vs "task" vs "workshop"
   const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task" | "workshop">("chat");
   const [activeWorkshopBuild, setActiveWorkshopBuild] = useState<WorkshopBuildState | null>(null);
+
+  // AI Voice Global Mute State
+  const [voiceMuted, setVoiceMuted] = useState<boolean>(() => {
+    return localStorage.getItem("angel_voice_muted") === "true";
+  });
+
+  const handleToggleVoiceMute = () => {
+    const next = !voiceMuted;
+    setVoiceMuted(next);
+    localStorage.setItem("angel_voice_muted", next.toString());
+    if (voiceRef.current) {
+      voiceRef.current.setMuted(next);
+    }
+  };
 
   // Ambient Earth Opacity (defaults to 50%)
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
@@ -811,6 +826,29 @@ export default function App() {
               </div>
             </div>
 
+            {/* AI Voice Speaker Mute / Unmute Toggle Button with Tooltip */}
+            <div className="relative group">
+              <button
+                type="button"
+                onClick={handleToggleVoiceMute}
+                title={voiceMuted ? "Unmute AI Voice" : "Mute AI Voice"}
+                className={`p-2 rounded-xl border text-xs font-bold transition flex items-center justify-center ${
+                  voiceMuted
+                    ? "bg-amber-500/20 border-amber-400/60 text-amber-300 shadow-[0_0_12px_rgba(245,158,11,0.35)]"
+                    : "bg-white/5 border-white/10 hover:bg-white/10 text-cyan-300 hover:text-white"
+                }`}
+              >
+                {voiceMuted ? (
+                  <VolumeX size={15} className="text-amber-400" />
+                ) : (
+                  <Volume2 size={15} className="text-cyan-400" />
+                )}
+              </button>
+              <div className="absolute top-full mt-1.5 right-0 hidden group-hover:flex px-2.5 py-1 rounded-lg bg-slate-900 border border-white/15 text-[10px] text-slate-200 whitespace-nowrap shadow-xl z-50 pointer-events-none">
+                {voiceMuted ? "Unmute AI Voice" : "Mute AI Voice"}
+              </div>
+            </div>
+
             {/* Window controls */}
             <div className="flex items-center gap-1 pl-2 border-l border-white/10">
               <button
@@ -1067,48 +1105,6 @@ export default function App() {
                   }}
                 />
 
-                {/* Tools Dropdown Button */}
-                <div className="relative">
-                  <button
-                    onClick={() => {
-                      setShowToolsDropdown(!showToolsDropdown);
-                      setShowPlusMenu(false);
-                      setShowModelDropdown(false);
-                    }}
-                    className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 flex items-center gap-1 transition"
-                  >
-                    <span>{selectedTool}</span>
-                    <ChevronDown size={12} className="text-slate-400" />
-                  </button>
-
-                  {showToolsDropdown && (
-                    <div className="absolute bottom-12 left-0 w-48 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
-                      {[
-                        { label: "Deep search", icon: Search },
-                        { label: "Guided learning", icon: GraduationCap },
-                        { label: "Personal intelligent", icon: Sparkles },
-                      ].map((tool, idx) => {
-                        const ToolIcon = tool.icon;
-                        return (
-                          <button
-                            key={idx}
-                            onClick={() => {
-                              setSelectedTool(tool.label);
-                              setShowToolsDropdown(false);
-                            }}
-                            className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2 ${
-                              selectedTool === tool.label ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
-                            }`}
-                          >
-                            <ToolIcon size={14} />
-                            <span>{tool.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
                 {/* Main Input Field */}
                 <input
                   type="text"
@@ -1197,7 +1193,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* EXTERNAL CHAT, TASK & 3D WORKSHOP DYNAMIC MODE PILLS */}
+              {/* EXTERNAL CHAT, TASK, 3D WORKSHOP & TOOLS DYNAMIC MODE PILLS */}
               <div className="flex items-center justify-center gap-2 pt-0.5">
                 <button
                   onClick={() => setWorkspaceMode("chat")}
@@ -1238,6 +1234,53 @@ export default function App() {
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
                   )}
                 </button>
+
+                {/* Tools Pill beside Chat / Task / 3D Workshop */}
+                <div className="relative">
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(!showToolsDropdown);
+                      setShowPlusMenu(false);
+                      setShowModelDropdown(false);
+                    }}
+                    className={`px-3.5 py-1 rounded-full text-xs font-bold transition flex items-center gap-1.5 ${
+                      showToolsDropdown
+                        ? "bg-amber-500/20 border border-amber-400/50 text-amber-200 shadow-sm"
+                        : "bg-white/5 border border-white/10 text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    <Sparkles size={12} className="text-amber-400" />
+                    <span>{selectedTool}</span>
+                    <ChevronDown size={11} className="text-slate-400" />
+                  </button>
+
+                  {showToolsDropdown && (
+                    <div className="absolute bottom-9 left-1/2 -translate-x-1/2 w-48 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
+                      {[
+                        { label: "Deep search", icon: Search },
+                        { label: "Guided learning", icon: GraduationCap },
+                        { label: "Personal intelligent", icon: Sparkles },
+                      ].map((tool, idx) => {
+                        const ToolIcon = tool.icon;
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              setSelectedTool(tool.label);
+                              setShowToolsDropdown(false);
+                            }}
+                            className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 flex items-center gap-2 ${
+                              selectedTool === tool.label ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
+                            }`}
+                          >
+                            <ToolIcon size={14} />
+                            <span>{tool.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
         </main>

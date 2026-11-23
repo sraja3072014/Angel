@@ -2,9 +2,42 @@ import { GoogleGenAI } from "@google/genai";
 import { invoke } from "@tauri-apps/api/core";
 import { loadAngelConfig } from "./cloudBrain";
 
+export interface AngelVoiceConfig {
+  preferredMic: string;
+  vadTimeout: number; // 800 - 2500ms, default 1400
+  languageMode: "auto" | "ta-IN" | "en-IN"; // default "auto"
+  ttsEngine: "edge" | "multimodal" | "webspeech" | "piper_sapi"; // default "edge"
+}
+
+export const DEFAULT_VOICE_CONFIG: AngelVoiceConfig = {
+  preferredMic: "default",
+  vadTimeout: 1400,
+  languageMode: "auto",
+  ttsEngine: "edge",
+};
+
+export function loadAngelVoiceConfig(): AngelVoiceConfig {
+  try {
+    const raw = localStorage.getItem("angel_voice_config");
+    if (raw) return { ...DEFAULT_VOICE_CONFIG, ...JSON.parse(raw) };
+  } catch {}
+  return DEFAULT_VOICE_CONFIG;
+}
+
+export function saveAngelVoiceConfig(cfg: AngelVoiceConfig) {
+  try {
+    localStorage.setItem("angel_voice_config", JSON.stringify(cfg));
+    localStorage.setItem("angel_vad_silence_ms", cfg.vadTimeout.toString());
+    localStorage.setItem("angel_voice_engine", cfg.ttsEngine);
+  } catch (e) {
+    console.warn("Failed to save voice config:", e);
+  }
+}
+
 export class AngelVoiceEngine {
   private isConversationActive = false;
   private isSpeaking = false;
+  private isMuted = false;
   private isWakeWordEnabled = false;
 
   private mediaRecorder: MediaRecorder | null = null;
@@ -40,6 +73,7 @@ export class AngelVoiceEngine {
       this.onStatusChange = second as (status: string, listening: boolean) => void;
     }
 
+    this.isMuted = localStorage.getItem("angel_voice_muted") === "true";
     this.initSpeechRecognition();
   }
 
@@ -47,18 +81,44 @@ export class AngelVoiceEngine {
     this.onAudioLevelChange = cb;
   }
 
+  public setMuted(muted: boolean) {
+    this.isMuted = muted;
+    if (muted) {
+      this.stopSpeaking();
+    }
+  }
+
+  public stopSpeaking() {
+    this.isSpeaking = false;
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+  }
+
   private initSpeechRecognition() {
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRec) {
       this.speechRecognition = new SpeechRec();
       this.speechRecognition.continuous = true;
-      this.speechRecognition.interimResults = false;
-      this.speechRecognition.lang = "en-IN";
+      this.speechRecognition.interimResults = true;
+
+      const voiceCfg = loadAngelVoiceConfig();
+      this.speechRecognition.lang = voiceCfg.languageMode === "en-IN" ? "en-IN" : "ta-IN";
 
       this.speechRecognition.onresult = (event: any) => {
-        if (!this.isWakeWordEnabled || this.isSpeaking) return;
         const lastIndex = event.results.length - 1;
         const heard = event.results[lastIndex][0].transcript.toLowerCase().trim();
+
+        // Fast Interrupt detection
+        if (/^(stop|wait|நிறுத்து|போதும்|அமைதி|quiet|pause)$/i.test(heard)) {
+          this.stopSpeaking();
+          this.stopRecording();
+          return;
+        }
+
+        if (!this.isWakeWordEnabled || this.isSpeaking) return;
 
         if (heard.includes("hey angel") || heard.includes("angel") || heard.includes("ஏஞ்சல்")) {
           const cleaned = heard.replace(/hey angel|angel|ஏஞ்சல்/gi, "").trim();
@@ -103,7 +163,7 @@ export class AngelVoiceEngine {
 
   public stopAll() {
     this.isConversationActive = false;
-    this.isSpeaking = false;
+    this.stopSpeaking();
     this.stopVAD();
 
     if (this.mediaRecorder && this.mediaRecorder.state === "recording") {
@@ -116,7 +176,7 @@ export class AngelVoiceEngine {
   }
 
   /**
-   * 1. Smart Real-Time Silence Detection (VAD): Stops recording 1.2s after user finishes speaking
+   * Smart Real-Time Silence Detection (VAD) with phrase buffering
    */
   public async listenOnce(keepConversationLoop = true) {
     return this.listenWithVAD(keepConversationLoop);
@@ -126,12 +186,29 @@ export class AngelVoiceEngine {
     if (this.isSpeaking) return;
     this.isConversationActive = keepConversationLoop;
     this.onWakeDetected?.();
-    this.onStatusChange("Listening... (Speak in Tamil or English)", true);
+
+    const voiceCfg = loadAngelVoiceConfig();
+    const isTa = voiceCfg.languageMode !== "en-IN";
+    this.onStatusChange(
+      isTa
+        ? "Listening... (பேசுங்கள்: தமிழ் அல்லது English)"
+        : "Listening... (Speak your command)",
+      true
+    );
 
     try {
-      this.audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
+      const constraints: MediaStreamConstraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(voiceCfg.preferredMic && voiceCfg.preferredMic !== "default"
+            ? { deviceId: { ideal: voiceCfg.preferredMic } }
+            : {}),
+        },
+      };
+
+      this.audioStream = await navigator.mediaDevices.getUserMedia(constraints);
 
       // Setup Web Audio API Analyser for VAD
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -159,12 +236,12 @@ export class AngelVoiceEngine {
 
       this.mediaRecorder.start();
 
-      // Real-time VAD Monitoring
+      // Real-time VAD Monitoring with Phrase Buffering
       const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
       let userHasSpoken = false;
       let lastSpeechTime = Date.now();
-      const SILENCE_TIMEOUT_MS = 1250; // 1.25s silence detection threshold
-      const MAX_RECORD_LIMIT_MS = 14000; // 14s safety ceiling
+      const SILENCE_TIMEOUT_MS = voiceCfg.vadTimeout || 1400; // default 1400ms
+      const MAX_RECORD_LIMIT_MS = 16000; // 16s safety ceiling
       const startTime = Date.now();
 
       const checkSilence = () => {
@@ -183,12 +260,12 @@ export class AngelVoiceEngine {
         const now = Date.now();
 
         // Energy threshold check (speech detected)
-        if (normalizedLevel > 0.08) {
+        if (normalizedLevel > 0.07) {
           userHasSpoken = true;
           lastSpeechTime = now;
         }
 
-        // If user spoke and was silent for 1.2s -> finish recording
+        // Phrase buffer: finish when user paused longer than SILENCE_TIMEOUT_MS
         if (userHasSpoken && now - lastSpeechTime > SILENCE_TIMEOUT_MS) {
           if (this.mediaRecorder.state === "recording") {
             this.mediaRecorder.stop();
@@ -208,7 +285,8 @@ export class AngelVoiceEngine {
       };
 
       this.vadAnimationId = requestAnimationFrame(checkSilence);
-    } catch (err) {
+    } catch (err: any) {
+      console.warn("Microphone access error:", err);
       this.onStatusChange("Unable to access the microphone. Please check settings.", false);
       try {
         await this.runRustOfflineMic();
@@ -249,9 +327,16 @@ export class AngelVoiceEngine {
   }
 
   /**
-   * 2. Custom WAV/MP3 Voice File or Piper/Edge Neural TTS Voice Output
+   * Neural Speech Synthesis (Tamil & English Dual-Route)
    */
   public async speak(text: string, onStart?: () => void, onEnd?: () => void) {
+    if (this.isMuted || localStorage.getItem("angel_voice_muted") === "true") {
+      this.stopSpeaking();
+      onEnd?.();
+      this.resumeListeningIfActive();
+      return;
+    }
+
     const cleanText = text
       .replace(/\[ACTION:[^\]]+\]/g, "")
       .replace(/[*#_`]/g, "")
@@ -273,23 +358,59 @@ export class AngelVoiceEngine {
       }
 
       const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
-      await invoke("speak_offline_tts", { text: cleanText, isTamil: hasTamil });
-    } catch {
-      if ("speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-        const utter = new SpeechSynthesisUtterance(cleanText);
-        utter.lang = /[\u0B80-\u0BFF]/.test(cleanText) ? "ta-IN" : "en-IN";
-        await new Promise<void>((resolve) => {
-          utter.onend = () => resolve();
-          utter.onerror = () => resolve();
-          window.speechSynthesis.speak(utter);
-        });
+      const voiceCfg = loadAngelVoiceConfig();
+
+      if (voiceCfg.ttsEngine === "webspeech") {
+        await this.speakWebSpeech(cleanText, hasTamil);
+      } else {
+        try {
+          await invoke("speak_offline_tts", { text: cleanText, isTamil: hasTamil });
+        } catch {
+          await this.speakWebSpeech(cleanText, hasTamil);
+        }
       }
+    } catch {
+      const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
+      await this.speakWebSpeech(cleanText, hasTamil);
     } finally {
       this.isSpeaking = false;
       onEnd?.();
       this.resumeListeningIfActive();
     }
+  }
+
+  private async speakWebSpeech(text: string, isTamil: boolean): Promise<void> {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = isTamil ? "ta-IN" : "en-IN";
+    utter.rate = isTamil ? 0.95 : 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    if (isTamil) {
+      const taVoice = voices.find(
+        (v) =>
+          v.lang.startsWith("ta") ||
+          v.name.toLowerCase().includes("tamil") ||
+          v.name.toLowerCase().includes("pallavi")
+      );
+      if (taVoice) utter.voice = taVoice;
+    } else {
+      const enVoice = voices.find(
+        (v) =>
+          v.lang.startsWith("en-IN") ||
+          v.name.toLowerCase().includes("neerja") ||
+          v.name.toLowerCase().includes("india")
+      );
+      if (enVoice) utter.voice = enVoice;
+    }
+
+    await new Promise<void>((resolve) => {
+      utter.onend = () => resolve();
+      utter.onerror = () => resolve();
+      window.speechSynthesis.speak(utter);
+    });
   }
 
   private async tryPlayCustomAudio(url: string): Promise<boolean> {
@@ -319,7 +440,7 @@ export class AngelVoiceEngine {
   }
 
   /**
-   * 3. Audio File Processing
+   * Audio File & STT Processing with Gemini Multimodal / Offline fallback
    */
   public async processAudioFile(file: File) {
     this.onStatusChange(`Reading audio: ${file.name}...`, true);
@@ -343,7 +464,7 @@ export class AngelVoiceEngine {
               model: cleanModelName(model),
               contents: [
                 { inlineData: { mimeType, data: base64Audio } },
-                "Transcribe this audio accurately into text (Tamil, English, or Tanglish). Return ONLY the spoken words, nothing else.",
+                "Transcribe this audio accurately into text (Tamil, English, or mixed Tanglish). Return ONLY the spoken words, nothing else.",
               ],
             });
             const text = (resp.text || "").trim();

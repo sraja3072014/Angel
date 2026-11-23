@@ -42,6 +42,7 @@ import {
   Radio,
   DownloadCloud,
   UploadCloud,
+  Languages,
 } from "lucide-react";
 import {
   loadAngelConfig,
@@ -64,6 +65,12 @@ import {
   restoreFromGitHubGist,
   testDiscordBridge,
 } from "../services/cloudBrain";
+import {
+  AngelVoiceConfig,
+  loadAngelVoiceConfig,
+  saveAngelVoiceConfig,
+  AngelVoiceEngine,
+} from "../services/voiceEngine";
 
 interface MenuControlCenterProps {
   initialTab?: string;
@@ -528,42 +535,70 @@ export function MenuControlCenterWindow({
   // ==========================================
   // TAB 4: AI VOICE & SPEECH STATE
   // ==========================================
-  const [preferredMic, setPreferredMic] = useState<string>(() => {
-    const cfg = loadAngelConfig();
-    return cfg.preferredMic || "realme Buds Wireless 5 ANC";
-  });
-  const [vadTimeout, setVadTimeout] = useState<number>(() => {
-    const val = localStorage.getItem("angel_vad_silence_ms");
-    return val ? parseInt(val, 10) : 1400;
-  });
-  const [voiceEngine, setVoiceEngine] = useState<string>(() => {
-    return localStorage.getItem("angel_voice_engine") || "neural_webspeech";
-  });
+  const [voiceConfig, setVoiceConfig] = useState<AngelVoiceConfig>(() => loadAngelVoiceConfig());
+  const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([]);
+  const [isRefreshingMics, setIsRefreshingMics] = useState<boolean>(false);
+  const [voiceTestStatus, setVoiceTestStatus] = useState<string>("");
 
-  const handleSaveVoice = () => {
-    const cfg = loadAngelConfig();
-    cfg.preferredMic = preferredMic;
-    saveAngelConfig(cfg);
-    localStorage.setItem("angel_vad_silence_ms", vadTimeout.toString());
-    localStorage.setItem("angel_voice_engine", voiceEngine);
-    showToast("Voice and microphone settings saved!");
+  const refreshMicrophones = async () => {
+    setIsRefreshingMics(true);
+    try {
+      if (typeof navigator !== "undefined" && navigator.mediaDevices) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {
+          // Perm prompt might be skipped or rejected, still enumerate
+        }
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter((d) => d.kind === "audioinput");
+        setAvailableMics(audioInputs);
+        if (audioInputs.length > 0) {
+          showToast(`Detected ${audioInputs.length} audio input device(s).`);
+        }
+      } else {
+        showToast("Audio device enumeration not supported in this browser.");
+      }
+    } catch (err: any) {
+      console.warn("Error enumerating mics:", err);
+      showToast("Unable to detect microphones. Check permissions.");
+    } finally {
+      setIsRefreshingMics(false);
+    }
   };
 
-  const handleTestVoice = (lang: "ta" | "en") => {
-    if (!("speechSynthesis" in window)) {
-      showToast("Web Speech API not supported on this platform.");
-      return;
+  useEffect(() => {
+    if (activeTab === "voice") {
+      refreshMicrophones();
     }
-    window.speechSynthesis.cancel();
+  }, [activeTab]);
+
+  const handleSaveVoice = () => {
+    saveAngelVoiceConfig(voiceConfig);
+    const cfg = loadAngelConfig();
+    cfg.preferredMic = voiceConfig.preferredMic;
+    saveAngelConfig(cfg);
+    showToast("Voice, language & microphone settings saved!");
+  };
+
+  const handleTestVoice = async (lang: "ta" | "en") => {
     const text =
       lang === "ta"
-        ? "வணக்கம் ராஜா, நான் தயார்! Project Angel AI குரல் என்ஜின் இயங்குகிறது."
+        ? "வணக்கம் ராஜா, நான் ஏஞ்சல் AI. உங்கள் கட்டளைக்குத் தயாராக இருக்கிறேன்."
         : "Hello Raja, Project Angel AI neural voice synthesis is operational and ready.";
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang === "ta" ? "ta-IN" : "en-US";
-    u.rate = 1.05;
-    window.speechSynthesis.speak(u);
-    showToast(`Testing ${lang === "ta" ? "Tamil" : "English"} voice synthesis...`);
+    setVoiceTestStatus(`Testing ${lang === "ta" ? "Tamil" : "English"} neural voice...`);
+    showToast(`Synthesizing ${lang === "ta" ? "Tamil" : "English"} voice...`);
+    try {
+      const engine = new AngelVoiceEngine(() => {}, () => {}, () => {});
+      await engine.speak(
+        text,
+        () => setVoiceTestStatus(`Speaking ${lang === "ta" ? "Tamil" : "English"}...`),
+        () => setVoiceTestStatus(`Completed ${lang === "ta" ? "Tamil" : "English"} synthesis.`)
+      );
+    } catch (err: any) {
+      setVoiceTestStatus(`Error: ${err.message || String(err)}`);
+      showToast(`Voice test failed: ${err.message || String(err)}`);
+    }
   };
 
   // ==========================================
@@ -2276,104 +2311,286 @@ export function MenuControlCenterWindow({
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
                     <Mic size={18} className="text-cyan-400" />
-                    <span>AI Voice & Speech Settings</span>
+                    <span>AI Voice & Neural Speech Settings</span>
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Select preferred audio input device, configure Voice Activity Detection (VAD) silence duration, and test speech synthesis.
+                    Select preferred audio input device, configure VAD silence auto-send buffering, bilingual Tamil/Tanglish language mode, and neural speech synthesis engine.
                   </p>
                 </div>
 
                 {/* Preferred Mic */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="text-xs font-semibold text-white">Preferred Audio Microphone</div>
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-white">Preferred Audio Microphone</div>
+                      <div className="text-[11px] text-slate-400">Hardware input device for Speech-to-Text & Voice Activity Detection (VAD)</div>
+                    </div>
+                    <button
+                      onClick={refreshMicrophones}
+                      disabled={isRefreshingMics}
+                      className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-slate-300 hover:text-white flex items-center gap-1.5 transition disabled:opacity-50"
+                      title="Enumerate system microphones"
+                    >
+                      <RefreshCw size={13} className={isRefreshingMics ? "animate-spin text-cyan-400" : "text-slate-400"} />
+                      <span>{isRefreshingMics ? "Scanning..." : "Refresh Mics"}</span>
+                    </button>
+                  </div>
+
                   <select
-                    value={preferredMic}
-                    onChange={(e) => setPreferredMic(e.target.value)}
+                    value={voiceConfig.preferredMic}
+                    onChange={(e) => setVoiceConfig((prev) => ({ ...prev, preferredMic: e.target.value }))}
                     className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
                   >
-                    <option value="realme Buds Wireless 5 ANC">realme Buds Wireless 5 ANC (Bluetooth Active)</option>
-                    <option value="Microphone Array (Realtek Audio)">Microphone Array (Realtek Audio)</option>
-                    <option value="Default System Microphone">Default System Microphone</option>
+                    <option value="default">Default System Microphone</option>
+                    {availableMics.length > 0 ? (
+                      availableMics.map((mic, idx) => (
+                        <option key={mic.deviceId || idx} value={mic.deviceId || mic.label}>
+                          {mic.label || `Microphone ${idx + 1}`} {mic.deviceId ? `(${mic.deviceId.slice(0, 8)}...)` : ""}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="realme Buds Wireless 5 ANC">realme Buds Wireless 5 ANC (Bluetooth Active)</option>
+                        <option value="Microphone Array (Realtek Audio)">Microphone Array (Realtek Audio)</option>
+                      </>
+                    )}
+                    {voiceConfig.preferredMic &&
+                      voiceConfig.preferredMic !== "default" &&
+                      !availableMics.some((m) => m.deviceId === voiceConfig.preferredMic || m.label === voiceConfig.preferredMic) &&
+                      voiceConfig.preferredMic !== "realme Buds Wireless 5 ANC" &&
+                      voiceConfig.preferredMic !== "Microphone Array (Realtek Audio)" && (
+                        <option value={voiceConfig.preferredMic}>{voiceConfig.preferredMic} (Saved)</option>
+                      )}
                   </select>
                 </div>
 
                 {/* VAD Silence Timeout Slider */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="flex justify-between text-xs text-slate-300">
-                    <span className="font-semibold text-white">VAD Silence Auto-Send Timeout: {vadTimeout} ms</span>
-                    <span className="text-slate-400">Range: 800ms - 2500ms</span>
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex justify-between items-center text-xs">
+                    <div>
+                      <span className="font-semibold text-white">VAD Silence Auto-Send Timeout: </span>
+                      <span className="font-mono text-cyan-400 font-bold">{voiceConfig.vadTimeout} ms</span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">Range: 800ms - 2500ms (Default: 1400ms)</span>
                   </div>
                   <input
                     type="range"
                     min="800"
                     max="2500"
-                    step="100"
-                    value={vadTimeout}
-                    onChange={(e) => setVadTimeout(parseInt(e.target.value, 10))}
-                    className="w-full accent-cyan-400 bg-slate-800"
+                    step="50"
+                    value={voiceConfig.vadTimeout}
+                    onChange={(e) =>
+                      setVoiceConfig((prev) => ({ ...prev, vadTimeout: parseInt(e.target.value, 10) }))
+                    }
+                    className="w-full accent-cyan-400 bg-slate-800 h-1.5 rounded-lg cursor-pointer"
                   />
-                  <p className="text-[11px] text-slate-400">
-                    When speaking stops for {vadTimeout}ms, Angel AI will immediately commit your voice and start generating the reply.
-                  </p>
+                  <div className="p-3 rounded-lg bg-black/30 border border-white/5 space-y-1.5 text-[11px] text-slate-300">
+                    <p className="flex items-center gap-1.5 text-cyan-300 font-medium">
+                      <Clock size={12} />
+                      <span>VAD phrase buffering auto-commits voice after {voiceConfig.vadTimeout}ms of natural silence.</span>
+                    </p>
+                    <p className="text-slate-400 flex items-center gap-1.5">
+                      <Zap size={12} className="text-amber-400 shrink-0" />
+                      <span>
+                        <strong className="text-slate-200">Fast Interrupt Keywords:</strong> Saying "stop", "wait", "நிறுத்து", "போதும்", "அமைதி", or "pause" bypasses the buffer and interrupts AI speech immediately.
+                      </span>
+                    </p>
+                  </div>
                 </div>
 
-                {/* Voice Engine Selector */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="text-xs font-semibold text-white">Neural Speech Engine</div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Voice Language Mode Selector */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div>
+                    <div className="text-xs font-semibold text-white flex items-center gap-2">
+                      <Languages size={15} className="text-cyan-400" />
+                      <span>Voice Language Mode</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Select primary dialect or let Angel AI auto-detect Tamil, English, and Tanglish bilingually
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     <button
-                      onClick={() => setVoiceEngine("neural_webspeech")}
-                      className={`p-3 rounded-xl border text-left transition ${
-                        voiceEngine === "neural_webspeech"
-                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-200"
-                          : "bg-black/20 border-white/10 text-slate-300"
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, languageMode: "auto" }))}
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                        voiceConfig.languageMode === "auto"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
                       }`}
                     >
-                      <div className="text-xs font-bold">Web Speech API Neural</div>
-                      <div className="text-[10px] text-slate-400">Bilingual Tamil (ta-IN) & Indian English</div>
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-xs font-bold">Auto Detect (Bilingual)</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-cyan-500/30 text-cyan-300">Default</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Tamil + English + Tanglish. Automatically adapts voice and STT based on spoken words.
+                      </p>
                     </button>
+
                     <button
-                      onClick={() => setVoiceEngine("offline_edge_sapi")}
-                      className={`p-3 rounded-xl border text-left transition ${
-                        voiceEngine === "offline_edge_sapi"
-                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-200"
-                          : "bg-black/20 border-white/10 text-slate-300"
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, languageMode: "ta-IN" }))}
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                        voiceConfig.languageMode === "ta-IN"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
                       }`}
                     >
-                      <div className="text-xs font-bold">Windows SAPI Offline</div>
-                      <div className="text-[10px] text-slate-400">Local fallback when disconnected</div>
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-xs font-bold">Tamil (தமிழ்)</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300">ta-IN</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Strict Tamil neural speech synthesis and recognition (Pallavi Neural).
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, languageMode: "en-IN" }))}
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                        voiceConfig.languageMode === "en-IN"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-xs font-bold">English (India / UK)</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300">en-IN</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Natural Indian & British English neural speech synthesis and recognition (Neerja Neural).
+                      </p>
                     </button>
                   </div>
                 </div>
 
-                {/* Voice Test Buttons */}
+                {/* Speech & Voice Engine Selector */}
                 <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
-                  <div className="text-xs font-semibold text-white">Audio Synthesis Verification</div>
+                  <div>
+                    <div className="text-xs font-semibold text-white">Speech & Voice Engine</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">Choose speech generation backend for AI vocal responses</div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, ttsEngine: "edge" }))}
+                      className={`p-3 rounded-xl border text-left transition ${
+                        voiceConfig.ttsEngine === "edge"
+                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">Edge Neural TTS</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-cyan-500/30 text-cyan-300">Recommended</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        ta-IN-PallaviNeural & en-IN-NeerjaNeural high-fidelity cloud neural speech.
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, ttsEngine: "multimodal" }))}
+                      className={`p-3 rounded-xl border text-left transition ${
+                        voiceConfig.ttsEngine === "multimodal"
+                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">Gemini / Whisper Multimodal</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-purple-500/20 text-purple-300">AI Direct</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        AI direct audio comprehension & natural multimodal audio synthesis.
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, ttsEngine: "webspeech" }))}
+                      className={`p-3 rounded-xl border text-left transition ${
+                        voiceConfig.ttsEngine === "webspeech"
+                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">Web Speech API</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-blue-500/20 text-blue-300">Browser</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Zero-latency in-browser SpeechSynthesis with native OS Tamil & English voices.
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setVoiceConfig((prev) => ({ ...prev, ttsEngine: "piper_sapi" }))}
+                      className={`p-3 rounded-xl border text-left transition ${
+                        voiceConfig.ttsEngine === "piper_sapi"
+                          ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">Piper / Windows SAPI</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300">100% Offline</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-1">
+                        Fully offline local ONNX Piper neural speech with zero internet requirement.
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Voice Test Buttons & Status */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-white">Live Voice Test & Synthesis Verification</div>
+                      <div className="text-[11px] text-slate-400">Preview spoken Tamil and English voice outputs before saving</div>
+                    </div>
+                    {voiceTestStatus && (
+                      <span className="text-[11px] px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-400/30 text-cyan-300 animate-pulse">
+                        {voiceTestStatus}
+                      </span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-2.5">
                     <button
+                      type="button"
                       onClick={() => handleTestVoice("ta")}
-                      className="px-3.5 py-2 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-2 transition"
+                      className="px-4 py-2.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-2 transition shadow-sm hover:shadow-cyan-500/20"
                     >
-                      <Volume2 size={14} />
-                      <span>Test Tamil Voice ("வணக்கம்")</span>
+                      <Volume2 size={15} />
+                      <span>Test Tamil Voice ("வணக்கம் ராஜா...")</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => handleTestVoice("en")}
-                      className="px-3.5 py-2 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-xs font-bold flex items-center gap-2 transition"
+                      className="px-4 py-2.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-xs font-bold flex items-center gap-2 transition shadow-sm hover:shadow-indigo-500/20"
                     >
-                      <Volume2 size={14} />
-                      <span>Test English Voice</span>
+                      <Volume2 size={15} />
+                      <span>Test English Voice ("Hello Raja...")</span>
                     </button>
                   </div>
                 </div>
 
-                <button
-                  onClick={handleSaveVoice}
-                  className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition"
-                >
-                  <Save size={15} />
-                  <span>Save Voice Settings</span>
-                </button>
+                <div className="pt-2">
+                  <button
+                    onClick={handleSaveVoice}
+                    className="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/25 active:scale-95"
+                  >
+                    <Save size={15} />
+                    <span>Save AI Voice & Speech Settings</span>
+                  </button>
+                </div>
               </div>
             )}
 
