@@ -63,8 +63,8 @@ export class AngelVoiceEngine {
   private onAudioLevelChange?: (level: number) => void;
 
   constructor(
-    first: (() => void) | ((text: string) => void),
-    second: ((text: string) => void) | ((status: string, listening: boolean) => void),
+    first?: (() => void) | ((text: string) => void),
+    second?: ((text: string) => void) | ((status: string, listening: boolean) => void),
     third?: ((status: string, listening: boolean) => void) | ((level: number) => void),
     fourth?: (level: number) => void
   ) {
@@ -77,9 +77,12 @@ export class AngelVoiceEngine {
       this.onWakeDetected = first as () => void;
       this.onCommandRecognized = second as (text: string) => void;
       this.onStatusChange = third as (status: string, listening: boolean) => void;
-    } else {
-      this.onCommandRecognized = first as (text: string) => void;
+    } else if (typeof second === "function") {
+      this.onCommandRecognized = (first || (() => {})) as (text: string) => void;
       this.onStatusChange = second as (status: string, listening: boolean) => void;
+    } else {
+      this.onCommandRecognized = () => {};
+      this.onStatusChange = () => {};
     }
 
     this.isMuted = localStorage.getItem("angel_voice_muted") === "true";
@@ -427,6 +430,29 @@ export class AngelVoiceEngine {
     }
   }
 
+  public async speakSecurityAlert(tamilAlertText: string, playChime = true): Promise<void> {
+    if (playChime && typeof window !== "undefined") {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          const audioCtx = new AudioContextClass();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.25);
+          gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.3);
+        }
+      } catch {}
+    }
+    await this.speak(tamilAlertText);
+  }
+
   private async playAudioBase64(dataUrl: string, cfg: AngelVoiceConfig): Promise<void> {
     const audio = new Audio(dataUrl);
     audio.volume = Math.max(0, Math.min(1, (cfg.volume ?? 85) / 100));
@@ -611,6 +637,12 @@ export class AngelVoiceEngine {
       reader.readAsDataURL(blob);
     });
   }
+}
+
+export const angelVoice = new AngelVoiceEngine();
+
+export async function speakSecurityAlert(tamilText: string, playChime = true): Promise<void> {
+  await angelVoice.speakSecurityAlert(tamilText, playChime);
 }
 
 export const voiceEngine = {

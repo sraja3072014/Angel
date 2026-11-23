@@ -1132,12 +1132,102 @@ Available Action Tags:
 - Control Media Playback: [ACTION:MEDIA|play_pause] or [ACTION:MEDIA|next] or [ACTION:MEDIA|prev]
 - Search User Files: [ACTION:SEARCH_FILES|project]
 
-Multi-Action Sequential Execution Examples:
-1. User: "Set volume to 80%, take a screenshot, and open Firefox with YouTube"
-   Assistant: "Sure Raja, adjusting volume to 80%, capturing your screen, and launching Firefox with YouTube now. [ACTION:SET_VOLUME|80] [ACTION:SCREENSHOT] [ACTION:OPEN_TARGET|firefox https://www.youtube.com]"
+// Multi-Action Sequential Execution Examples:
+// 1. User: "Set volume to 80%, take a screenshot, and open Firefox with YouTube"
+//    Assistant: "Sure Raja, adjusting volume to 80%, capturing your screen, and launching Firefox with YouTube now. [ACTION:SET_VOLUME|80] [ACTION:SCREENSHOT] [ACTION:OPEN_TARGET|firefox https://www.youtube.com]"
+//
+// 2. User: "ஒலியளவை 60% ஆக்கி நோட்பேட் திற"
+//    Assistant: "சரி ராஜா, ஒலியளவை 60% ஆக மாற்றி Notepad-ஐ திறக்கிறேன். [ACTION:SET_VOLUME|60] [ACTION:OPEN_TARGET|notepad]"`;
 
-2. User: "ஒலியளவை 60% ஆக்கி நோட்பேட் திற"
-   Assistant: "சரி ராஜா, ஒலியளவை 60% ஆக மாற்றி Notepad-ஐ திறக்கிறேன். [ACTION:SET_VOLUME|60] [ACTION:OPEN_TARGET|notepad]"`;
+// =========================================================================
+// SMART LRU CACHE & INTELLIGENT DECISION ENGINE
+// =========================================================================
+
+export interface BrainDiagnostics {
+  selectedBrain: string;
+  classification: "Quick Lookup" | "Code / Reverse-Engineering" | "Defensive Security Audit" | "3D Workshop" | "Tamil/Tanglish" | "General Reasoning";
+  cacheHit: boolean;
+  failoverRecoveryCount: number;
+  latencyMs: number;
+}
+
+interface CacheEntry {
+  response: string;
+  timestamp: number;
+}
+
+export class SmartLruCache {
+  private cache = new Map<string, CacheEntry>();
+  private readonly maxEntries = 50;
+  private readonly ttlMs = 10 * 60 * 1000; // 10 minutes
+
+  private isBypassed(prompt: string): boolean {
+    const p = prompt.toLowerCase();
+    if (/time|date|today|now|clock|நேரம்|மணி|நாள்|weather|climate|வானிலை/i.test(p)) return true;
+    if (/battery|cpu|ram|temp|temperature|fan|telemetry|system health/i.test(p)) return true;
+    if (/\[action:|launch |open |close |mute |kill |set volume/i.test(p)) return true;
+    if (p.length < 5) return true;
+    return false;
+  }
+
+  public get(prompt: string): string | null {
+    if (this.isBypassed(prompt)) return null;
+    const key = prompt.trim().toLowerCase();
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+    this.cache.delete(key);
+    this.cache.set(key, entry);
+    return entry.response;
+  }
+
+  public set(prompt: string, response: string): void {
+    if (this.isBypassed(prompt) || !response || response.length < 10) return;
+    const key = prompt.trim().toLowerCase();
+    if (this.cache.size >= this.maxEntries) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { response, timestamp: Date.now() });
+  }
+
+  public clear(): void {
+    this.cache.clear();
+  }
+
+  public size(): number {
+    return this.cache.size;
+  }
+}
+
+export const brainCache = new SmartLruCache();
+
+export function classifyPromptIntent(
+  prompt: string
+): "Quick Lookup" | "Code / Reverse-Engineering" | "Defensive Security Audit" | "3D Workshop" | "Tamil/Tanglish" | "General Reasoning" {
+  const p = prompt.toLowerCase();
+
+  if (/[\u0B80-\u0BFF]|வணக்கம்|நன்றி|எப்படி|செய்|சொல்லு|பாரு|வேலை|என்ன/i.test(prompt)) {
+    return "Tamil/Tanglish";
+  }
+  if (/3d|workshop|three\.js|stl|mesh|geometry|jet engine|turbofan|telemetry pc|vertex|hologram|digital twin/i.test(p)) {
+    return "3D Workshop";
+  }
+  if (/security|antivirus|firewall|canary|ransomware|malware|quarantine|hardening|usb|ports|forensics|sha256|entropy/i.test(p)) {
+    return "Defensive Security Audit";
+  }
+  if (/github\.com|reverse engineer|rea skill|rebuild|transpile|rust|typescript|react|crate|syntax|function|struct|def |class /i.test(p)) {
+    return "Code / Reverse-Engineering";
+  }
+  if (p.length < 80 && /^(what is|who is|define|when did|how many|capital of|meaning of)/i.test(p)) {
+    return "Quick Lookup";
+  }
+
+  return "General Reasoning";
+}
 
 export class CloudBrainService {
   private memoryCache: Record<string, MemoryFact> = {};
@@ -1145,6 +1235,17 @@ export class CloudBrainService {
   private isListeningRelay = false;
   // Multi-key round-robin rotation index
   private keyRotationIndex: Record<string, number> = {};
+  private lastDiagnostics: BrainDiagnostics = {
+    selectedBrain: "Auto Smart Router",
+    classification: "General Reasoning",
+    cacheHit: false,
+    failoverRecoveryCount: 0,
+    latencyMs: 0,
+  };
+
+  public getBrainDiagnostics(): BrainDiagnostics {
+    return { ...this.lastDiagnostics };
+  }
 
   constructor() {
     try {
@@ -1678,6 +1779,26 @@ Never use destructive commands (rm, del, format).`;
     userPrompt: string,
     options?: GeminiAskOptions
   ): Promise<string> {
+    const startTime = performance.now();
+    const classification = classifyPromptIntent(userPrompt);
+
+    // 0. Smart LRU Cache (<5ms resolution for non-dynamic queries)
+    const cachedResponse = brainCache.get(userPrompt);
+    if (cachedResponse) {
+      this.lastDiagnostics = {
+        selectedBrain: "Smart LRU Cache (<5ms)",
+        classification,
+        cacheHit: true,
+        failoverRecoveryCount: 0,
+        latencyMs: Math.round(performance.now() - startTime),
+      };
+      options?.onChunk?.(cachedResponse);
+      if (options?.onFirstSentence) {
+        options.onFirstSentence(cachedResponse);
+      }
+      return cachedResponse;
+    }
+
     // 1. Skill Forge check
     if (/create skill|new skill|forge skill|புதிய திறன்|பிளகின் உருவாக்கு/i.test(userPrompt)) {
       const forgeRes = await this.forgeSkill(userPrompt);
@@ -1717,9 +1838,8 @@ Never use destructive commands (rm, del, format).`;
       targetProvider = providers.find((p) => p.id === "auto") || providers[0];
     }
 
-    // Build execution list
-    // True cascade chain: Google Gemini -> FreeLLMAPI (127.0.0.1:31415) -> Groq -> DeepSeek -> OpenAI -> Claude -> GitHub Copilot -> Ollama (localhost:11434) -> Local LLM
-    const priorityOrder = [
+    // Dynamic Intent-based routing order
+    let priorityOrder = [
       "gemini",
       "openrouter",
       "groq",
@@ -1730,6 +1850,16 @@ Never use destructive commands (rm, del, format).`;
       "ollama",
       "local_lmstudio",
     ];
+
+    if (classification === "Quick Lookup") {
+      priorityOrder = ["groq", "gemini", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+    } else if (classification === "Code / Reverse-Engineering") {
+      priorityOrder = ["gemini", "groq", "deepseek", "openai", "anthropic", "openrouter", "github", "ollama", "local_lmstudio"];
+    } else if (classification === "Defensive Security Audit") {
+      priorityOrder = ["gemini", "anthropic", "openai", "groq", "deepseek", "openrouter", "github", "ollama", "local_lmstudio"];
+    } else if (classification === "Tamil/Tanglish") {
+      priorityOrder = ["gemini", "groq", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+    }
 
     const isConfigured = (p: AIProviderConfig) => {
       if (!p.enabled) return false;
@@ -1768,7 +1898,10 @@ Never use destructive commands (rm, del, format).`;
 
     const isAutoRouting = targetProvider.id === "auto" || autoFailover;
     let lastError: any = null;
-    for (const provider of executionList) {
+    let failoverRecoveryCount = 0;
+
+    for (let i = 0; i < executionList.length; i++) {
+      const provider = executionList[i];
       try {
         let fullText = "";
 
@@ -1797,11 +1930,23 @@ Never use destructive commands (rm, del, format).`;
             this.saveFact("learned_rule", `rule_${Date.now()}`, userPrompt);
           }
 
+          // Cache in SmartLruCache
+          brainCache.set(userPrompt, cleanReply);
+
+          this.lastDiagnostics = {
+            selectedBrain: provider.name,
+            classification,
+            cacheHit: false,
+            failoverRecoveryCount,
+            latencyMs: Math.round(performance.now() - startTime),
+          };
+
           incrementUsageTelemetry("prompt", Math.round(userPrompt.length * 0.75 + fullText.length * 0.75));
           return cleanReply;
         }
       } catch (err: any) {
         lastError = err;
+        failoverRecoveryCount++;
         console.warn(`Provider ${provider.name} failed (${err?.message || err}). Cascading to next provider...`);
         if (!isAutoRouting) break;
       }

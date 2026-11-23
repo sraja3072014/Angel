@@ -20,13 +20,92 @@ import {
   XCircle,
   HardDrive,
   Usb,
-  EyeOff,
   FolderLock,
   X,
   Cpu,
   Flame,
   ArrowRight,
+  Network,
+  FileText,
+  Check,
 } from "lucide-react";
+import { speakSecurityAlert } from "../services/voiceEngine";
+
+export interface CanaryGuardStatus {
+  active: boolean;
+  guarded_paths: string[];
+  canary_files_ok: boolean;
+  rapid_changes_detected: boolean;
+  unsigned_binaries_found: string[];
+  status_message: string;
+  last_checked: string;
+}
+
+export interface UsbDeviceInfo {
+  instance_id: string;
+  friendly_name: string;
+  is_trusted: boolean;
+}
+
+export interface OutboundConnInfo {
+  local_port: number;
+  remote_ip: string;
+  remote_port: number;
+  pid: number;
+  process_name: string;
+  is_trusted: boolean;
+}
+
+export interface UsbNetworkAnomalyReport {
+  connected_usbs: UsbDeviceInfo[];
+  new_untrusted_usbs: UsbDeviceInfo[];
+  active_outbound_conns: OutboundConnInfo[];
+  suspicious_remote_ips: OutboundConnInfo[];
+  baseline_approved_usbs_count: number;
+  baseline_approved_ips_count: number;
+  alert_triggered: boolean;
+  alert_message: string;
+}
+
+export interface HardeningCheckItem {
+  name: string;
+  description: string;
+  is_hardened: boolean;
+  impact: string;
+}
+
+export interface WindowsHardeningReport {
+  score: number;
+  defender_active: boolean;
+  firewall_domain: boolean;
+  firewall_private: boolean;
+  firewall_public: boolean;
+  uac_enabled: boolean;
+  smb1_disabled: boolean;
+  checks: HardeningCheckItem[];
+  recommendation: string;
+}
+
+export interface ListeningPortInfo {
+  protocol: string;
+  local_address: string;
+  local_port: number;
+  pid: number;
+  process_name: string;
+}
+
+export interface FileForensicsReport {
+  file_path: string;
+  file_name: string;
+  file_size_bytes: number;
+  sha256_hash: string;
+  entropy: number;
+  is_high_entropy: boolean;
+  signature_status: string;
+  signer: string;
+  extracted_urls: string[];
+  verdict: string;
+}
 
 interface ThreatItem {
   id: string;
@@ -88,7 +167,22 @@ interface SecuritySuiteProps {
 
 export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: SecuritySuiteProps) {
   const [activeTab, setActiveTab] = useState<string>(initialTab);
-  const [subTab, setSubTab] = useState<"quick" | "deep" | "vault">("quick");
+  const [subTab, setSubTab] = useState<"quick" | "deep" | "vault" | "forensics">("quick");
+
+  // Defensive Sentry & Canary Guard State
+  const [canaryStatus, setCanaryStatus] = useState<CanaryGuardStatus | null>(null);
+  const [canaryLoading, setCanaryLoading] = useState<boolean>(false);
+  const [usbAnomalyReport, setUsbAnomalyReport] = useState<UsbNetworkAnomalyReport | null>(null);
+  const [usbAnomalyLoading, setUsbAnomalyLoading] = useState<boolean>(false);
+  const [hardeningReport, setHardeningReport] = useState<WindowsHardeningReport | null>(null);
+  const [hardeningLoading, setHardeningLoading] = useState<boolean>(false);
+  const [portsList, setPortsList] = useState<ListeningPortInfo[]>([]);
+  const [portsLoading, setPortsLoading] = useState<boolean>(false);
+  const [forensicsFilePath, setForensicsFilePath] = useState<string>("");
+  const [forensicsReport, setForensicsReport] = useState<FileForensicsReport | null>(null);
+  const [forensicsLoading, setForensicsLoading] = useState<boolean>(false);
+  const [quarantinePidInput, setQuarantinePidInput] = useState<string>("");
+  const [quarantinePathInput, setQuarantinePathInput] = useState<string>("");
 
   // Title bar clock
   const [clock, setClock] = useState<string>("");
@@ -160,14 +254,6 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
   const [doctorLoading, setDoctorLoading] = useState<boolean>(false);
   const [doctorFeedback, setDoctorFeedback] = useState<string>("");
 
-  // Privacy & USB Guard state
-  const [usbWatcher, setUsbWatcher] = useState<boolean>(true);
-  const [privacyCamGuard, setPrivacyCamGuard] = useState<boolean>(true);
-  const [ransomwareShield, setRansomwareShield] = useState<boolean>(true);
-  const [keyloggerIsolation, setKeyloggerIsolation] = useState<boolean>(true);
-  const [usbScanResults, setUsbScanResults] = useState<ThreatItem[]>([]);
-  const [usbScanning, setUsbScanning] = useState<boolean>(false);
-
   // Load Initial Data
   const refreshVault = async () => {
     setLoadingVault(true);
@@ -227,11 +313,181 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
     }
   };
 
+  const forwardDiscordSecurityAlert = async (title: string, details: string) => {
+    try {
+      const cfgRaw = localStorage.getItem("angel_cloud_storage_config");
+      if (!cfgRaw) return;
+      const cfg = JSON.parse(cfgRaw);
+      const webhookUrl = cfg.discordWebhook?.trim();
+      if (webhookUrl && webhookUrl.startsWith("https://discord.com/api/webhooks/")) {
+        const payload = JSON.stringify({
+          username: "Angel AI Cyber-Shield Sentinel",
+          avatar_url: "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/templates/app-icon.png",
+          embeds: [
+            {
+              title: `🚨 ${title}`,
+              description: details,
+              color: 0x00f0ff,
+              timestamp: new Date().toISOString(),
+              footer: { text: "Angel AI Defensive Sentry • Project Angel Tauri" },
+            },
+          ],
+        });
+        await invoke("send_discord_webhook", { webhookUrl, message: payload }).catch(() => {});
+      }
+    } catch {}
+  };
+
+  const handleCheckCanary = async () => {
+    setCanaryLoading(true);
+    try {
+      const res = await invoke<CanaryGuardStatus>("check_canary_status");
+      setCanaryStatus(res);
+      if (!res.canary_files_ok) {
+        speakSecurityAlert("எச்சரிக்கை! சந்தேகத்திற்கிடமான கோப்பு மாற்றம் கண்டறியப்பட்டுள்ளது");
+        forwardDiscordSecurityAlert(
+          "RANSOMWARE CANARY COMPROMISED",
+          "Canary sentinel integrity breached in guarded workspace paths! Possible unauthorized encryption attempt."
+        );
+      }
+      setStatusFeedback(res.status_message);
+    } catch (e: any) {
+      setStatusFeedback(`Canary check notice: ${e?.message || e}`);
+    } finally {
+      setCanaryLoading(false);
+    }
+  };
+
+  const handleStartCanary = async () => {
+    setCanaryLoading(true);
+    try {
+      const res = await invoke<CanaryGuardStatus>("start_ransomware_canary_guard");
+      setCanaryStatus(res);
+      setStatusFeedback("Ransomware Canary Sentinel initialized across workspace paths.");
+    } catch (e: any) {
+      setStatusFeedback(`Error starting canary: ${e?.message || e}`);
+    } finally {
+      setCanaryLoading(false);
+    }
+  };
+
+  const handleScanUsbAndNetwork = async () => {
+    setUsbAnomalyLoading(true);
+    try {
+      const res = await invoke<UsbNetworkAnomalyReport>("scan_usb_and_network_anomalies");
+      setUsbAnomalyReport(res);
+      if (res.alert_triggered) {
+        speakSecurityAlert("எச்சரிக்கை ராஜா! புதிய USB சாதனம் அல்லது அங்கீகரிக்கப்படாத வெளிப்புற இணைப்பு கண்டறியப்பட்டுள்ளது");
+        forwardDiscordSecurityAlert("PERIPHERAL / OUTBOUND NETWORK ANOMALY", res.alert_message);
+      }
+      setStatusFeedback(res.alert_message);
+    } catch (e: any) {
+      setStatusFeedback(`Watchdog scan notice: ${e?.message || e}`);
+    } finally {
+      setUsbAnomalyLoading(false);
+    }
+  };
+
+  const handleApproveBaseline = async () => {
+    if (!usbAnomalyReport) return;
+    const usbIds = usbAnomalyReport.connected_usbs.map((u) => u.instance_id);
+    const remoteIps = usbAnomalyReport.active_outbound_conns.map((c) => c.remote_ip);
+    try {
+      const msg = await invoke<string>("approve_security_baseline", { usbIds, remoteIps });
+      setStatusFeedback(msg);
+      await handleScanUsbAndNetwork();
+    } catch (e: any) {
+      setStatusFeedback(`Baseline error: ${e?.message || e}`);
+    }
+  };
+
+  const handleAuditHardening = async () => {
+    setHardeningLoading(true);
+    try {
+      const res = await invoke<WindowsHardeningReport>("audit_windows_hardening");
+      setHardeningReport(res);
+    } catch (e: any) {
+      setStatusFeedback(`Hardening audit notice: ${e?.message || e}`);
+    } finally {
+      setHardeningLoading(false);
+    }
+  };
+
+  const handleApplyHardening = async () => {
+    setHardeningLoading(true);
+    try {
+      const msg = await invoke<string>("apply_defensive_hardening");
+      setStatusFeedback(msg);
+      speakSecurityAlert("விண்டோஸ் ஃபயர்வால் மற்றும் பாதுகாப்பு அமைப்புகள் பலப்படுத்தப்பட்டுள்ளன");
+      await handleAuditHardening();
+    } catch (e: any) {
+      setStatusFeedback(`Hardening dispatch notice: ${e?.message || e}`);
+    } finally {
+      setHardeningLoading(false);
+    }
+  };
+
+  const handleScanPorts = async () => {
+    setPortsLoading(true);
+    try {
+      const ports = await invoke<ListeningPortInfo[]>("scan_active_ports_and_processes");
+      setPortsList(ports);
+    } catch (e: any) {
+      console.warn("Ports scan notice:", e);
+    } finally {
+      setPortsLoading(false);
+    }
+  };
+
+  const handleInspectForensics = async () => {
+    if (!forensicsFilePath.trim()) {
+      setStatusFeedback("Please enter a valid file path to inspect.");
+      return;
+    }
+    setForensicsLoading(true);
+    try {
+      const report = await invoke<FileForensicsReport>("inspect_file_forensics", {
+        filePath: forensicsFilePath.trim(),
+      });
+      setForensicsReport(report);
+      setStatusFeedback(`File forensics analysis complete for: ${report.file_name}`);
+    } catch (e: any) {
+      setStatusFeedback(`Forensics error: ${e?.message || e}`);
+    } finally {
+      setForensicsLoading(false);
+    }
+  };
+
+  const handleQuarantineProcess = async () => {
+    const pid = parseInt(quarantinePidInput);
+    if (!pid || isNaN(pid)) {
+      setStatusFeedback("Please enter a valid process PID.");
+      return;
+    }
+    try {
+      const msg = await invoke<string>("quarantine_suspicious_process", {
+        pid,
+        filePath: quarantinePathInput.trim() || null,
+      });
+      setStatusFeedback(msg);
+      speakSecurityAlert("சந்தேகத்திற்கிடமான செயல்முறை தனிமைப்படுத்தப்பட்டு நிறுத்தப்பட்டது");
+      setQuarantinePidInput("");
+      setQuarantinePathInput("");
+      await refreshVault();
+    } catch (e: any) {
+      setStatusFeedback(`Quarantine error: ${e?.message || e}`);
+    }
+  };
+
   useEffect(() => {
     try {
       refreshVault().catch(() => {});
       refreshFirewall().catch(() => {});
       refreshDoctor().catch(() => {});
+      handleCheckCanary().catch(() => {});
+      handleScanUsbAndNetwork().catch(() => {});
+      handleAuditHardening().catch(() => {});
+      handleScanPorts().catch(() => {});
     } catch {}
   }, []);
 
@@ -392,24 +648,6 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
       setDoctorFeedback(`Restore point error: ${err}`);
     } finally {
       setDoctorLoading(false);
-    }
-  };
-
-  // Privacy & USB Guard Actions
-  const handleScanUsbDrives = async () => {
-    setUsbScanning(true);
-    try {
-      const threats = await invoke<ThreatItem[]>("scan_removable_drives");
-      setUsbScanResults(threats);
-      setStatusFeedback(
-        threats.length === 0
-          ? "USB Guard: Removable drives checked. Zero autorun or executable threats found."
-          : `USB Guard: Warning! ${threats.length} threats detected on removable drives.`
-      );
-    } catch (err: any) {
-      setStatusFeedback(`USB scan error: ${err}`);
-    } finally {
-      setUsbScanning(false);
     }
   };
 
@@ -678,6 +916,19 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
                 >
                   <Lock size={13} /> Quarantine Vault Manager ({quarantineItems.length})
                 </button>
+                <button
+                  onClick={() => {
+                    setSubTab("forensics");
+                    handleScanPorts();
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                    subTab === "forensics"
+                      ? "bg-cyan-500/25 border border-cyan-400/60 text-cyan-200"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <FileText size={13} /> Static File Forensics & Ports
+                </button>
               </div>
 
               {/* Sub-tab 1 & 2: Scanner UI */}
@@ -856,6 +1107,160 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Sub-tab 4: Static File Forensics & Ports Watchdog */}
+              {subTab === "forensics" && (
+                <div className="flex-1 flex flex-col space-y-4 overflow-y-auto">
+                  {/* File Forensics Card */}
+                  <div className="p-4 rounded-2xl bg-white/5 border border-cyan-400/25 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FileText size={18} className="text-cyan-400" />
+                        <div>
+                          <h4 className="text-xs font-bold text-white">Static File Forensics Inspector</h4>
+                          <p className="text-[11px] text-slate-400">
+                            Deep static inspection without execution: SHA-256 hash, Shannon entropy, Authenticode signature, and embedded URLs.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={forensicsFilePath}
+                        onChange={(e) => setForensicsFilePath(e.target.value)}
+                        placeholder="C:\path\to\suspicious_file.exe or script.vbs"
+                        className="flex-1 p-2 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                      />
+                      <button
+                        onClick={handleInspectForensics}
+                        disabled={forensicsLoading}
+                        className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-md shadow-cyan-500/20"
+                      >
+                        <Search size={13} className={forensicsLoading ? "animate-spin" : ""} />
+                        <span>{forensicsLoading ? "Analyzing..." : "Analyze File"}</span>
+                      </button>
+                    </div>
+
+                    {forensicsReport && (
+                      <div className="p-3 rounded-xl bg-black/50 border border-white/10 space-y-2 font-mono text-xs">
+                        <div className="flex items-center justify-between pb-1.5 border-b border-white/10">
+                          <span className="font-bold text-white">{forensicsReport.file_name}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              forensicsReport.is_high_entropy
+                                ? "bg-amber-500/20 text-amber-300 border border-amber-400/30"
+                                : "bg-emerald-500/20 text-emerald-300 border border-emerald-400/30"
+                            }`}
+                          >
+                            {forensicsReport.is_high_entropy ? "HIGH ENTROPY" : "NORMAL ENTROPY"}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                          <div>
+                            <span className="text-slate-400">File Size:</span>{" "}
+                            <span className="text-cyan-300">{(forensicsReport.file_size_bytes / 1024).toFixed(1)} KB</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Shannon Entropy:</span>{" "}
+                            <span className={forensicsReport.is_high_entropy ? "text-amber-400 font-bold" : "text-emerald-400"}>
+                              {forensicsReport.entropy.toFixed(3)} / 8.0
+                            </span>
+                          </div>
+                          <div className="col-span-full truncate">
+                            <span className="text-slate-400">SHA-256:</span>{" "}
+                            <span className="text-slate-200 select-all">{forensicsReport.sha256_hash}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400">Authenticode:</span>{" "}
+                            <span className={forensicsReport.signature_status === "Valid" ? "text-emerald-400 font-bold" : "text-slate-300"}>
+                              {forensicsReport.signature_status}
+                            </span>
+                          </div>
+                          <div className="truncate">
+                            <span className="text-slate-400">Signer:</span>{" "}
+                            <span className="text-slate-300">{forensicsReport.signer}</span>
+                          </div>
+                        </div>
+
+                        {forensicsReport.extracted_urls.length > 0 && (
+                          <div className="pt-1.5 border-t border-white/10 text-[10px]">
+                            <span className="text-slate-400 block mb-1">Extracted Network Endpoints:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {forensicsReport.extracted_urls.map((u, i) => (
+                                <span key={i} className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-cyan-300">
+                                  {u}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="pt-1.5 border-t border-white/10 text-[11px]">
+                          <span className="text-slate-400">Defensive Verdict:</span>{" "}
+                          <span className="text-cyan-200 font-sans font-bold">{forensicsReport.verdict}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Active Listening Ports & Processes Card */}
+                  <div className="p-4 rounded-2xl bg-white/5 border border-cyan-400/25 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Network size={18} className="text-sky-400" />
+                        <div>
+                          <h4 className="text-xs font-bold text-white">Active Listening Ports & Process Watchdog</h4>
+                          <p className="text-[11px] text-slate-400">
+                            Real-time audit of local TCP/UDP listeners and owning application binaries.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleScanPorts}
+                        disabled={portsLoading}
+                        className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/10 text-white text-xs font-bold flex items-center gap-1.5 transition"
+                      >
+                        <RefreshCw size={12} className={portsLoading ? "animate-spin" : ""} />
+                        <span>Refresh Ports</span>
+                      </button>
+                    </div>
+
+                    <div className="max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-black/40 font-mono text-[11px]">
+                      {portsList.length > 0 ? (
+                        <table className="w-full text-left">
+                          <thead className="bg-white/5 text-slate-400 border-b border-white/10">
+                            <tr>
+                              <th className="p-2">Proto</th>
+                              <th className="p-2">Local Address</th>
+                              <th className="p-2">Port</th>
+                              <th className="p-2">PID</th>
+                              <th className="p-2">Process Name</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-white/5">
+                            {portsList.map((p, idx) => (
+                              <tr key={idx} className="hover:bg-white/5 transition">
+                                <td className="p-2 text-sky-400 font-bold">{p.protocol}</td>
+                                <td className="p-2 text-slate-300">{p.local_address}</td>
+                                <td className="p-2 text-cyan-300 font-bold">{p.local_port}</td>
+                                <td className="p-2 text-slate-400">{p.pid}</td>
+                                <td className="p-2 text-emerald-300 font-semibold truncate max-w-[150px]">{p.process_name}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <div className="p-4 text-center text-slate-500 text-xs">
+                          {portsLoading ? "Auditing active sockets..." : "No anomalous listening ports detected."}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -1165,150 +1570,260 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
             </div>
           )}
 
-          {/* TAB 4: PRIVACY & USB GUARD */}
+          {/* TAB 4: PRIVACY & DEFENSIVE CYBER-SHIELD */}
           {activeTab === "privacy" && (
-            <div className="h-full flex flex-col space-y-3">
-              <div className="p-4 rounded-2xl bg-white/5 border border-cyan-400/25 flex items-center justify-between">
+            <div className="h-full flex flex-col space-y-4 overflow-y-auto">
+              {/* Header Banner */}
+              <div className="p-4 rounded-2xl bg-white/5 border border-cyan-400/25 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-extrabold text-white flex items-center gap-2">
                     <Usb size={18} className="text-indigo-400" />
-                    <span>Future-Ready Privacy & Peripheral Shield Suite</span>
+                    <span>Autonomous Defensive Cyber-Shield & Sentinel Hub</span>
                   </div>
                   <div className="text-xs text-slate-300 mt-0.5">
-                    Hardens Windows against removable USB thumb drive droppers, background camera eavesdropping, and ransomware.
+                    Ransomware Canary Folder Guards, USB & Outbound IP Watchdogs, and Windows 11 Hardening.
                   </div>
                 </div>
 
-                <button
-                  onClick={handleScanUsbDrives}
-                  disabled={usbScanning}
-                  className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-500/30 transition"
-                >
-                  <RefreshCw size={13} className={usbScanning ? "animate-spin" : ""} />
-                  <span>{usbScanning ? "Scanning USBs..." : "Scan Removable Drives"}</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCheckCanary}
+                    disabled={canaryLoading}
+                    className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition"
+                  >
+                    <RefreshCw size={13} className={canaryLoading ? "animate-spin" : ""} />
+                    <span>Check Canary</span>
+                  </button>
+                  <button
+                    onClick={handleScanUsbAndNetwork}
+                    disabled={usbAnomalyLoading}
+                    className="px-3.5 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-500/30 transition"
+                  >
+                    <Activity size={13} className={usbAnomalyLoading ? "animate-spin" : ""} />
+                    <span>Scan USB & Outbound IPs</span>
+                  </button>
+                </div>
               </div>
 
-              {/* 4 Privacy Toggles Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-300">
-                      <Usb size={20} />
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold text-white">USB Drive Auto-Scan Watcher</div>
-                      <div className="text-[11px] text-slate-400">
-                        Automatically scans newly mounted removable media for autorun.inf & root binaries.
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setUsbWatcher(!usbWatcher)}
-                    className={`px-3 py-1 rounded-full text-xs font-bold transition ${
-                      usbWatcher
-                        ? "bg-emerald-500/20 border border-emerald-400/60 text-emerald-300"
-                        : "bg-white/10 text-slate-400"
-                    }`}
-                  >
-                    {usbWatcher ? "ENABLED" : "DISABLED"}
-                  </button>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-rose-500/20 text-rose-300">
-                      <EyeOff size={20} />
-                    </div>
-                    <div>
-                      <div className="text-xs font-extrabold text-white">Webcam & Mic Privacy Guard</div>
-                      <div className="text-[11px] text-slate-400">
-                        Hardened against stealth background capture hooks and unauthorized audio recording.
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setPrivacyCamGuard(!privacyCamGuard)}
-                    className={`px-3 py-1 rounded-full text-xs font-bold transition ${
-                      privacyCamGuard
-                        ? "bg-emerald-500/20 border border-emerald-400/60 text-emerald-300"
-                        : "bg-white/10 text-slate-400"
-                    }`}
-                  >
-                    {privacyCamGuard ? "ENABLED" : "DISABLED"}
-                  </button>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
+              {/* 1. RANSOMWARE CANARY FOLDER SHIELD */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-cyan-400/25 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
                     <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-300">
                       <FolderLock size={20} />
                     </div>
                     <div>
-                      <div className="text-xs font-extrabold text-white">Ransomware Protected Folders</div>
+                      <div className="text-xs font-extrabold text-white flex items-center gap-2">
+                        <span>Ransomware Canary Sentinel Shield</span>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            canaryStatus?.canary_files_ok ?? true
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-400/30"
+                              : "bg-rose-500/20 text-rose-300 border border-rose-400/30"
+                          }`}
+                        >
+                          {canaryStatus?.canary_files_ok ?? true ? "CANARY INTACT" : "INTEGRITY ALERT"}
+                        </span>
+                      </div>
                       <div className="text-[11px] text-slate-400">
-                        Protects Documents, Desktop, and Pictures against unauthorized mass file encryption.
+                        Monitors hidden sentinel files (.angel_canary_guard.dat) in primary workspace folders to intercept mass encryption.
                       </div>
                     </div>
                   </div>
+
                   <button
-                    onClick={() => setRansomwareShield(!ransomwareShield)}
-                    className={`px-3 py-1 rounded-full text-xs font-bold transition ${
-                      ransomwareShield
-                        ? "bg-emerald-500/20 border border-emerald-400/60 text-emerald-300"
-                        : "bg-white/10 text-slate-400"
-                    }`}
+                    onClick={handleStartCanary}
+                    disabled={canaryLoading}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition shadow-md shadow-amber-500/20"
                   >
-                    {ransomwareShield ? "ENABLED" : "DISABLED"}
+                    Re-Arm Sentinel
                   </button>
                 </div>
 
-                <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2.5 rounded-xl bg-cyan-500/20 text-cyan-300">
-                      <Lock size={20} />
+                {canaryStatus && (
+                  <div className="p-3 rounded-xl bg-black/40 border border-white/10 space-y-2 text-xs font-mono">
+                    <div className="text-slate-300 text-[11px] flex items-center justify-between">
+                      <span>Status: {canaryStatus.status_message}</span>
+                      <span className="text-slate-500">Checked: {canaryStatus.last_checked}</span>
                     </div>
                     <div>
-                      <div className="text-xs font-extrabold text-white">Keystroke Buffer Isolation</div>
-                      <div className="text-[11px] text-slate-400">
-                        Prevents background user32 GetAsyncKeyState hooks from harvesting credentials.
+                      <span className="text-[10px] text-slate-500 uppercase block mb-1">Guarded Workspaces:</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {canaryStatus.guarded_paths.map((p, i) => (
+                          <span key={i} className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-cyan-300 text-[11px]">
+                            {p}
+                          </span>
+                        ))}
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Emergency Process Quarantine Input */}
+                <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="text-slate-300 font-semibold text-[11px]">Emergency Process Quarantine:</span>
+                  <input
+                    type="number"
+                    value={quarantinePidInput}
+                    onChange={(e) => setQuarantinePidInput(e.target.value)}
+                    placeholder="PID"
+                    className="w-20 p-1.5 rounded-lg bg-black/60 border border-white/15 text-white font-mono text-xs focus:outline-none focus:border-rose-400"
+                  />
+                  <input
+                    type="text"
+                    value={quarantinePathInput}
+                    onChange={(e) => setQuarantinePathInput(e.target.value)}
+                    placeholder="Optional File Path (e.g. C:\Users\Public\malware.exe)"
+                    className="flex-1 min-w-[200px] p-1.5 rounded-lg bg-black/60 border border-white/15 text-white font-mono text-xs focus:outline-none focus:border-rose-400"
+                  />
                   <button
-                    onClick={() => setKeyloggerIsolation(!keyloggerIsolation)}
-                    className={`px-3 py-1 rounded-full text-xs font-bold transition ${
-                      keyloggerIsolation
-                        ? "bg-emerald-500/20 border border-emerald-400/60 text-emerald-300"
-                        : "bg-white/10 text-slate-400"
-                    }`}
+                    onClick={handleQuarantineProcess}
+                    className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition flex items-center gap-1 shadow-md shadow-rose-600/30"
                   >
-                    {keyloggerIsolation ? "ENABLED" : "DISABLED"}
+                    <Trash2 size={12} />
+                    <span>Kill & Vault</span>
                   </button>
                 </div>
               </div>
 
-              {/* USB Scan Results if any */}
-              {usbScanResults.length > 0 && (
-                <div className="p-3 rounded-2xl bg-rose-950/60 border border-rose-500/60 space-y-2">
-                  <div className="text-xs font-black text-rose-200 uppercase">
-                    Removable Drive Threats Detected:
-                  </div>
-                  {usbScanResults.map((t) => (
-                    <div key={t.id} className="text-xs text-white font-mono flex items-center justify-between">
-                      <span>
-                        {t.file_name} ({t.threat_type})
-                      </span>
-                      <button
-                        onClick={() => handleQuarantineFoundThreat(t.file_path)}
-                        className="px-2 py-1 bg-rose-600 rounded text-[10px] font-bold"
-                      >
-                        Quarantine
-                      </button>
+              {/* 2. USB & LIVE OUTBOUND CONNECTION WATCHDOG */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-cyan-400/25 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-300">
+                      <Usb size={20} />
                     </div>
-                  ))}
+                    <div>
+                      <div className="text-xs font-extrabold text-white flex items-center gap-2">
+                        <span>USB Hardware & Outbound IP Watchdog</span>
+                        {usbAnomalyReport?.alert_triggered && (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-400/30">
+                            UNTRUSTED ACTIVITY
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Detects newly plugged USB flash drives and unauthorized non-local established outbound sockets.
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleApproveBaseline}
+                    disabled={!usbAnomalyReport}
+                    className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-slate-200 text-xs font-bold transition flex items-center gap-1"
+                  >
+                    <Check size={12} className="text-emerald-400" />
+                    <span>Approve Baseline</span>
+                  </button>
                 </div>
-              )}
+
+                {usbAnomalyReport && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/10 space-y-1.5">
+                      <div className="flex items-center justify-between text-slate-300 pb-1 border-b border-white/10">
+                        <span className="font-bold">USB Hardware ({usbAnomalyReport.connected_usbs.length})</span>
+                        <span className="text-[10px] text-slate-500">Trusted: {usbAnomalyReport.baseline_approved_usbs_count}</span>
+                      </div>
+                      <div className="max-h-32 overflow-y-auto space-y-1 text-[11px]">
+                        {usbAnomalyReport.connected_usbs.map((u, idx) => (
+                          <div key={idx} className="flex items-center justify-between">
+                            <span className="text-slate-300 truncate max-w-[200px]">{u.friendly_name}</span>
+                            <span className={u.is_trusted ? "text-emerald-400 text-[10px]" : "text-amber-400 text-[10px] font-bold"}>
+                              {u.is_trusted ? "TRUSTED" : "UNAPPROVED"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/10 space-y-1.5">
+                      <div className="flex items-center justify-between text-slate-300 pb-1 border-b border-white/10">
+                        <span className="font-bold">Outbound Sockets ({usbAnomalyReport.active_outbound_conns.length})</span>
+                        <span className="text-[10px] text-slate-500">Trusted: {usbAnomalyReport.baseline_approved_ips_count}</span>
+                      </div>
+                      <div className="max-h-32 overflow-y-auto space-y-1 text-[11px]">
+                        {usbAnomalyReport.active_outbound_conns.length > 0 ? (
+                          usbAnomalyReport.active_outbound_conns.map((c, idx) => (
+                            <div key={idx} className="flex items-center justify-between">
+                              <span className="text-cyan-300 truncate">{c.remote_ip}:{c.remote_port}</span>
+                              <span className="text-slate-400 text-[10px] truncate max-w-[120px]">{c.process_name}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="text-slate-500 text-center py-2">No external outbound TCP sockets.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 3. WINDOWS 11 HARDENING ADVISOR */}
+              <div className="p-4 rounded-2xl bg-slate-900/80 border border-cyan-400/25 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-14 h-14 rounded-2xl bg-cyan-950/80 border border-cyan-400/50 flex flex-col items-center justify-center">
+                      <span className="text-lg font-black text-cyan-300 font-mono">
+                        {hardeningReport?.score ?? 100}%
+                      </span>
+                      <span className="text-[8px] text-slate-400 uppercase font-bold">Hardened</span>
+                    </div>
+                    <div>
+                      <div className="text-xs font-extrabold text-white flex items-center gap-2">
+                        <span>Windows 11 Defensive Hardening Advisor</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 max-w-md">
+                        {hardeningReport?.recommendation || "Auditing Windows Defender, Firewall Profiles, UAC, and legacy protocol security..."}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleAuditHardening}
+                      disabled={hardeningLoading}
+                      className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition"
+                    >
+                      <RefreshCw size={13} className={hardeningLoading ? "animate-spin" : ""} />
+                      <span>Audit Score</span>
+                    </button>
+                    <button
+                      onClick={handleApplyHardening}
+                      disabled={hardeningLoading}
+                      className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-lg shadow-cyan-500/30 transition"
+                    >
+                      <ShieldCheck size={14} />
+                      <span>One-Click Harden Windows</span>
+                    </button>
+                  </div>
+                </div>
+
+                {hardeningReport && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs pt-1">
+                    {hardeningReport.checks.map((c, i) => (
+                      <div
+                        key={i}
+                        className={`p-2.5 rounded-xl border flex items-start gap-2 ${
+                          c.is_hardened
+                            ? "bg-emerald-950/30 border-emerald-500/30 text-emerald-200"
+                            : "bg-amber-950/30 border-amber-500/30 text-amber-200"
+                        }`}
+                      >
+                        {c.is_hardened ? (
+                          <CheckCircle2 size={16} className="text-emerald-400 shrink-0 mt-0.5" />
+                        ) : (
+                          <XCircle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+                        )}
+                        <div>
+                          <div className="font-bold text-white text-[11px]">{c.name}</div>
+                          <div className="text-[10px] text-slate-400 leading-tight mt-0.5">{c.description}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
