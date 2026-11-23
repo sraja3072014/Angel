@@ -170,7 +170,7 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     name: "Free LLM API",
     category: "cloud",
     apiKey: "",
-    endpoint: "https://openrouter.ai/api/v1/chat/completions",
+    endpoint: "http://127.0.0.1:31415/v1/chat/completions",
     defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
     availableModels: [
       "meta-llama/llama-3.3-70b-instruct:free",
@@ -179,8 +179,8 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     ],
     enabled: true,
     status: "missing_key",
-    description: "OpenRouter free-tier models — zero cost inference with free API key.",
-    consoleUrl: "https://openrouter.ai/keys",
+    description: "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)",
+    consoleUrl: "http://127.0.0.1:31415",
     capabilities: ["≋ STREAMING", "🆓 ZERO COST", "</> CODE GEN"],
   },
   {
@@ -259,8 +259,12 @@ export function loadAIProviders(): AIProviderConfig[] {
           availModels = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
         }
 
-        // Auto-migrate OpenRouter models to verified active free models
+        // Auto-migrate Free LLM API to FreeLLMAPI Unified Router default gateway endpoint (127.0.0.1:31415)
         if (def.id === "openrouter") {
+          let curEndpoint = existing.endpoint || def.endpoint;
+          if (!curEndpoint || curEndpoint.includes("openrouter.ai")) {
+            curEndpoint = "http://127.0.0.1:31415/v1/chat/completions";
+          }
           availModels = [
             "meta-llama/llama-3.3-70b-instruct:free",
             "google/gemma-2-9b-it:free",
@@ -269,6 +273,17 @@ export function loadAIProviders(): AIProviderConfig[] {
           if (!availModels.includes(defModel)) {
             defModel = "meta-llama/llama-3.3-70b-instruct:free";
           }
+          merged.push({
+            ...def,
+            ...existing,
+            endpoint: curEndpoint,
+            description: "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)",
+            consoleUrl: "http://127.0.0.1:31415",
+            capabilities: def.capabilities,
+            defaultModel: defModel,
+            availableModels: existing.availableModels && existing.availableModels.length > 0 ? existing.availableModels : availModels,
+          });
+          continue;
         }
 
         merged.push({
@@ -426,9 +441,61 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       if (!activeKey || !activeKey.trim()) {
         return {
           ok: false,
-          message: "OpenRouter requires a free API key (sk-or-v1-...). Paste your key above.",
+          message: "FreeLLMAPI requires an API key (freellmapi-...). Paste your key above.",
         };
       }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${activeKey.trim()}`,
+      };
+
+      // 1. Try querying /v1/models on FreeLLMAPI Unified Router gateway
+      let routerModels: string[] = [];
+      let baseUrl = provider.endpoint.replace(/\/chat\/completions$/, "").replace(/\/$/, "");
+      if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
+
+      try {
+        const modelsRes = await fetch(`${baseUrl}/models`, { headers });
+        if (modelsRes.ok) {
+          const mData = await modelsRes.json();
+          routerModels = (mData.data || mData.models || [])
+            .map((m: any) => m.id || m.name || m.model)
+            .filter(Boolean);
+        }
+      } catch {}
+
+      // 2. Perform chat completions ping test
+      let chatUrl = provider.endpoint;
+      if (!chatUrl.includes("/chat/completions")) {
+        chatUrl = `${baseUrl}/chat/completions`;
+      }
+
+      const res = await fetch(chatUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: provider.defaultModel || (routerModels[0] || "meta-llama/llama-3.3-70b-instruct:free"),
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 5,
+        }),
+      });
+
+      const latencyMs = Math.round(performance.now() - startTime);
+      if (res.ok) {
+        return {
+          ok: true,
+          message:
+            routerModels.length > 0
+              ? `Connected • ${latencyMs}ms (${routerModels.length} router models)`
+              : `Connected • ${latencyMs}ms`,
+          latencyMs,
+          models: routerModels.length > 0 ? routerModels : undefined,
+        };
+      }
+
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, message: err?.error?.message || err?.message || `HTTP ${res.status}` };
     }
 
     if (!activeKey && provider.id !== "local_lmstudio") {
@@ -931,7 +998,7 @@ Never use destructive commands (rm, del, format).`;
     if (provider.id === "openrouter") {
       const validKey = candidateKeys.find((k) => k && k.trim());
       if (!validKey) {
-        throw new Error("OpenRouter requires a free API key (sk-or-v1-...). Paste your key above.");
+        throw new Error("FreeLLMAPI requires an API key (freellmapi-...). Paste your key above.");
       }
     }
 
@@ -945,11 +1012,6 @@ Never use destructive commands (rm, del, format).`;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (key) {
         headers["Authorization"] = `Bearer ${key.trim()}`;
-      }
-      if (provider.id === "openrouter") {
-        headers["Authorization"] = `Bearer ${key.trim()}`;
-        headers["HTTP-Referer"] = "https://angel-ai.local";
-        headers["X-Title"] = "Angel AI";
       }
 
       try {

@@ -301,7 +301,7 @@ export function MenuControlCenterWindow({
     if (provider.id === "openrouter") {
       const keys = extractKeysList(provider.apiKey);
       if (keys.length === 0) {
-        const msg = "OpenRouter requires a free API key (sk-or-v1-...). Paste your key above.";
+        const msg = "FreeLLMAPI requires an API key (freellmapi-...). Paste your key above.";
         setTestResults((prev) => ({ ...prev, [provider.id]: { ok: false, message: msg } }));
         showToast(msg);
         return;
@@ -312,10 +312,42 @@ export function MenuControlCenterWindow({
     setTestResults((prev) => ({ ...prev, [provider.id]: result }));
     setTestingId(null);
     if (result.ok) {
-      handleUpdateProvider(provider.id, { status: "ready" });
+      handleUpdateProvider(provider.id, {
+        status: "ready",
+        ...(result.models && result.models.length > 0 ? { availableModels: result.models } : {}),
+      });
       showToast(`${provider.name}: ${result.message}`);
     } else {
       showToast(`Test failed for ${provider.name}: ${result.message}`);
+    }
+  };
+
+  const handleFetchRouterModels = async (provider: AIProviderConfig) => {
+    const keys = extractKeysList(provider.apiKey);
+    if (keys.length === 0) {
+      showToast("FreeLLMAPI requires an API key (freellmapi-...). Paste your key above.");
+      return;
+    }
+    setScanningOllama(true);
+    const result = await testProviderConnection(provider);
+    setScanningOllama(false);
+    setTestResults((prev) => ({ ...prev, [provider.id]: result }));
+    if (result.ok && result.models && result.models.length > 0) {
+      handleUpdateProvider(provider.id, {
+        availableModels: result.models,
+        defaultModel: result.models.includes(provider.defaultModel) ? provider.defaultModel : result.models[0],
+        status: "ready",
+      });
+      setSelectedModel(result.models.includes(provider.defaultModel) ? provider.defaultModel : result.models[0]);
+      localStorage.setItem(
+        "angel_primary_model",
+        result.models.includes(provider.defaultModel) ? provider.defaultModel : result.models[0]
+      );
+      showToast(`Synced ${result.models.length} router models from FreeLLMAPI!`);
+    } else if (result.ok) {
+      showToast(`Connected to FreeLLMAPI (${result.latencyMs}ms), but no models list returned.`);
+    } else {
+      showToast(`Failed to fetch router models: ${result.message}`);
     }
   };
 
@@ -1387,15 +1419,49 @@ export function MenuControlCenterWindow({
                           }
                           placeholder={
                             activeProvider.id === "openrouter"
-                              ? "sk-or-v1-...\n(Paste your free OpenRouter API key here — one key per line)"
+                              ? "freellmapi-xxxxxxxxxxxxxxxxxxxxxxxx\n(Paste multiple keys here — one key per line)"
                               : "sk-...\nsk-...\n(Paste multiple keys here — one key per line)"
                           }
                           className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition"
                         />
                         <div className="text-[11px] text-slate-400">
                           {activeProvider.id === "openrouter"
-                            ? "OpenRouter requires a free API key (sk-or-v1-...). One key per line — rotated automatically."
+                            ? "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)"
                             : "One key per line — rotated automatically to dodge rate limits."}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* FreeLLMAPI Gateway Endpoint URL & Fetch Router Models */}
+                    {activeProvider.id === "openrouter" && (
+                      <div className="space-y-1.5 pt-1">
+                        <label className="text-xs font-semibold text-slate-200">
+                          Gateway Endpoint URL (Port 31415)
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={activeProvider.endpoint}
+                            onChange={(e) =>
+                              handleUpdateProvider(activeProvider.id, {
+                                endpoint: e.target.value,
+                              })
+                            }
+                            placeholder="http://127.0.0.1:31415/v1/chat/completions"
+                            className="flex-1 px-3 py-2 bg-black/60 border border-white/15 rounded-xl text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleFetchRouterModels(activeProvider)}
+                            disabled={scanningOllama}
+                            className="px-3.5 py-2 rounded-xl bg-teal-500/20 hover:bg-teal-500/30 border border-teal-400/40 text-teal-300 text-xs font-bold flex items-center gap-1.5 transition shrink-0 disabled:opacity-50"
+                          >
+                            <RefreshCw size={13} className={scanningOllama ? "animate-spin" : ""} />
+                            <span>{scanningOllama ? "Fetching..." : "Fetch Router Models"}</span>
+                          </button>
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Queries http://127.0.0.1:31415/v1/models with Authorization Bearer header.
                         </div>
                       </div>
                     )}
