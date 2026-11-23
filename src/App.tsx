@@ -583,10 +583,92 @@ export default function App() {
         } catch {}
       }
 
+      // 1.4 GitHub Reverse-Engineering (REA) Detector
+      const ghUrlMatch = prompt.match(/https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/i);
+      const isReaPrompt =
+        ghUrlMatch &&
+        (promptLower.includes("reverse engineer") ||
+          promptLower.includes("use rea") ||
+          promptLower.includes("rea skill") ||
+          promptLower.includes("rebuild") ||
+          promptLower.includes("convert to zero python") ||
+          promptLower.includes("zero python") ||
+          promptLower.includes("transpile") ||
+          promptLower.includes("dissect") ||
+          promptLower.includes("deconstruct") ||
+          promptLower.includes("inspect repo"));
+
+      if (isReaPrompt && ghUrlMatch) {
+        const repoUrl = ghUrlMatch[0];
+        try {
+          const repoAudit = await invoke<string>("inspect_github_repo", { repoUrl });
+          let parsedAudit: any = {};
+          try {
+            parsedAudit = JSON.parse(repoAudit);
+          } catch {}
+
+          const reaPrompt = `You are Angel AI — Reverse-Engineer Anything (REA) Cognitive Architect.
+The user requested: "${prompt}"
+
+REVERSE-ENGINEERING TARGET AUDIT:
+- Repository: ${parsedAudit.repo_url || repoUrl} (Owner: ${parsedAudit.owner || "unknown"}, Repo: ${parsedAudit.repo || "unknown"})
+- Primary Stack: ${parsedAudit.detected_stack || parsedAudit.primary_language || "Generic Stack"}
+- Purpose: ${parsedAudit.description || "N/A"}
+- Manifest (${parsedAudit.manifest_name || "manifest"}):
+${(parsedAudit.manifest_content || "").slice(0, 1000)}
+- README Excerpt:
+${(parsedAudit.readme_excerpt || "").slice(0, 1500)}
+
+MANDATORY ARCHITECTURE DIRECTIVE:
+Break down the complete internal architecture and produce a 100% ZERO-PYTHON system rebuild plan for Project Angel Tauri:
+1. Native Rust Backend Service (src-tauri/src/*.rs) replacing all Python logic with native Rust crates (reqwest, serde, sysinfo, tokio) and CREATE_NO_WINDOW = 0x08000000.
+2. React 19 Frontend Components (src/*.tsx) + Tailwind CSS + Lucide Icons for real-time UI/HUD display.
+3. Complete Implementation Blueprint with concrete code snippets and exact integration commands.
+NEVER produce any Python (.py) code or dependencies.`;
+
+          const responseText = await brain.askGemini(reaPrompt, {
+            onChunk: (chunk: string) => {
+              setMessages((prev) =>
+                prev.map((m) => (m.id === assistantMsgId ? { ...m, text: chunk } : m))
+              );
+            },
+          });
+
+          incrementUsageTelemetry("prompt");
+          const finalMsgs = [
+            ...updatedUserMsgs,
+            {
+              id: assistantMsgId,
+              role: "assistant" as const,
+              text: responseText,
+              actionExecuted: `REA: ${parsedAudit.repo || "GitHub Repo"} Rebuild Plan`,
+              timestamp: formattedTime,
+            },
+          ];
+          setMessages(finalMsgs);
+          if (activeSessionId) {
+            setSessions((prev) => {
+              const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: finalMsgs } : s));
+              try {
+                localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated));
+              } catch {}
+              return sUpdated;
+            });
+          }
+          voiceRef.current?.speak(
+            "Repository reverse engineered. Zero Python rebuild plan ready.",
+            () => setSpeaking(true),
+            () => setSpeaking(false)
+          );
+          return;
+        } catch (err: any) {
+          console.error("REA GitHub inspection notice:", err);
+        }
+      }
+
       // 1.5 Check installed SkillForge plugins before general LLM query
       try {
         const skills = ((await invoke<any[]>("list_forged_skills").catch(() => invoke<any[]>("plugin_forge_list"))) || []) as any[];
-        const promptLower = prompt.toLowerCase().trim();
         const matchedSkill = skills?.find((s: any) => {
           if (!s.enabled) return false;
           const trigger = (s.trigger || "").toLowerCase().trim();
@@ -601,7 +683,7 @@ export default function App() {
         });
 
         if (matchedSkill) {
-          const res = await invoke<string>("run_forged_skill", { skillId: matchedSkill.id })
+          const res = await invoke<string>("run_forged_skill", { skillId: matchedSkill.id, userInput: prompt })
             .catch(() => invoke<string>("plugin_forge_execute", { skillId: matchedSkill.id }));
 
           if (res) {

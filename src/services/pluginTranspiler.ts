@@ -316,6 +316,17 @@ ${rawContent.slice(0, 4000)}`;
     ? parsed.trigger_phrases
     : [parsed.name.toLowerCase(), `run ${parsed.name.toLowerCase()}`];
 
+  // Sanitize command: strip trailing pipes or dangling pipe fragments and normalize user input tokens
+  let cleanCommand = (parsed.endpoint_or_command || "").trim();
+  while (cleanCommand.endsWith("|") || cleanCommand.endsWith(";")) {
+    cleanCommand = cleanCommand.replace(/[|;\s]+$/, "").trim();
+  }
+  cleanCommand = cleanCommand
+    .replace(/\{input\}/gi, "{{USER_INPUT}}")
+    .replace(/\{query\}/gi, "{{USER_INPUT}}")
+    .replace(/<input>/gi, "{{USER_INPUT}}")
+    .replace(/<query>/gi, "{{USER_INPUT}}");
+
   const pluginId = `skill_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
   return {
@@ -325,7 +336,7 @@ ${rawContent.slice(0, 4000)}`;
     source_stack_detected: detectedStack,
     converted_runtime: "Zero-Python Native",
     action_type: parsed.action_type === "HTTP_REST" ? "HTTP_REST" : parsed.action_type === "PROMPT_TOOL" ? "PROMPT_TOOL" : "POWERSHELL",
-    endpoint_or_command: parsed.endpoint_or_command,
+    endpoint_or_command: cleanCommand,
     method: parsed.method || (parsed.action_type === "HTTP_REST" ? "GET" : undefined),
     headers: parsed.headers,
     body_template: parsed.body_template,

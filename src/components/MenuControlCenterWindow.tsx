@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   Trash2,
   Play,
+  Pencil,
   Eye,
   EyeOff,
   Save,
@@ -112,10 +113,15 @@ interface SkillItem {
   id: string;
   name: string;
   description: string;
-  category: "system" | "security" | "maintenance" | "media";
+  category: "system" | "security" | "maintenance" | "media" | string;
   command: string;
   adminRequired: boolean;
   status: "active" | "standby";
+  trigger?: string;
+  trigger_phrases?: string[];
+  action_type?: string;
+  payload?: string;
+  isCustom?: boolean;
 }
 
 export function MenuControlCenterWindow({
@@ -289,6 +295,7 @@ export function MenuControlCenterWindow({
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string; latencyMs?: number }>>({});
   const [scanningOllama, setScanningOllama] = useState<boolean>(false);
+  const [showApiKeys, setShowApiKeys] = useState<boolean>(false);
 
   const handleUpdateProvider = (id: string, updates: Partial<AIProviderConfig>) => {
     setProviders((prev) => {
@@ -923,6 +930,13 @@ export function MenuControlCenterWindow({
   ];
   const [skillsList, setSkillsList] = useState<SkillItem[]>(initialSkills);
   const [skillRunning, setSkillRunning] = useState<string | null>(null);
+  const [editingSkill, setEditingSkill] = useState<SkillItem | null>(null);
+  const [isCreatingSkill, setIsCreatingSkill] = useState<boolean>(false);
+  const [skillFormName, setSkillFormName] = useState<string>("");
+  const [skillFormDesc, setSkillFormDesc] = useState<string>("");
+  const [skillFormTriggers, setSkillFormTriggers] = useState<string>("");
+  const [skillFormActionType, setSkillFormActionType] = useState<string>("powershell");
+  const [skillFormPayload, setSkillFormPayload] = useState<string>("");
 
   const refreshSkillsList = async () => {
     try {
@@ -931,13 +945,95 @@ export function MenuControlCenterWindow({
         id: s.id,
         name: s.name,
         description: s.description || `Forged Skill (Trigger: "${s.trigger}")`,
-        category: s.action_type || "custom_skill",
+        category: s.action_type || "powershell",
         command: s.id,
         adminRequired: false,
         status: s.enabled ? "active" : "standby",
+        trigger: s.trigger,
+        trigger_phrases: s.trigger_phrases,
+        action_type: s.action_type,
+        payload: s.payload,
+        isCustom: true,
       }));
       setSkillsList([...initialSkills, ...mappedDynamic]);
     } catch {}
+  };
+
+  const handleOpenEditSkill = (skill: SkillItem) => {
+    setEditingSkill(skill);
+    setIsCreatingSkill(false);
+    setSkillFormName(skill.name);
+    setSkillFormDesc(skill.description);
+    setSkillFormTriggers(
+      skill.trigger_phrases && skill.trigger_phrases.length > 0
+        ? skill.trigger_phrases.join(", ")
+        : skill.trigger || skill.name.toLowerCase()
+    );
+    setSkillFormActionType(skill.action_type || "powershell");
+    setSkillFormPayload(skill.payload || skill.command);
+  };
+
+  const handleOpenCreateSkill = () => {
+    setEditingSkill(null);
+    setIsCreatingSkill(true);
+    setSkillFormName("");
+    setSkillFormDesc("");
+    setSkillFormTriggers("");
+    setSkillFormActionType("powershell");
+    setSkillFormPayload("");
+  };
+
+  const handleSaveSkill = async () => {
+    if (!skillFormName.trim()) {
+      showToast("Skill name is required.");
+      return;
+    }
+    const safeId = editingSkill?.id || `skill_${Date.now()}`;
+    const rawTriggers = skillFormTriggers
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const primaryTrigger = rawTriggers[0] || skillFormName.toLowerCase().trim();
+
+    const skillPayload = {
+      id: safeId,
+      name: skillFormName.trim(),
+      trigger: primaryTrigger,
+      trigger_phrases: rawTriggers.length > 0 ? rawTriggers : [primaryTrigger],
+      action_type: skillFormActionType,
+      payload: skillFormPayload.trim(),
+      description: skillFormDesc.trim() || `Skill ${skillFormName.trim()}`,
+      enabled: true,
+      author: "User Custom",
+      created_at: `${Date.now()}`,
+    };
+
+    try {
+      await invoke("update_forged_skill", { skill: skillPayload }).catch(() =>
+        invoke("plugin_forge_save", { skill: skillPayload })
+      );
+      showToast(`⚡ Skill '${skillFormName.trim()}' saved successfully!`);
+      setEditingSkill(null);
+      setIsCreatingSkill(false);
+      await refreshSkillsList();
+    } catch (e: any) {
+      showToast(`Error saving skill: ${e?.message || e}`);
+    }
+  };
+
+  const handleDeleteSkill = async (skill: SkillItem) => {
+    if (!window.confirm(`Are you sure you want to delete '${skill.name}'?`)) {
+      return;
+    }
+    try {
+      await invoke("delete_forged_skill", { skillId: skill.id }).catch(() =>
+        invoke("plugin_forge_delete", { skillId: skill.id })
+      );
+      showToast(`Skill '${skill.name}' deleted.`);
+      await refreshSkillsList();
+    } catch (e: any) {
+      showToast(`Error deleting skill: ${e?.message || e}`);
+    }
   };
 
   useEffect(() => {
@@ -1620,8 +1716,17 @@ export function MenuControlCenterWindow({
                     {isCloud && (
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
-                          <label className="font-semibold text-slate-200">
-                            {activeProvider.name} API Keys (one per line — rotated automatically)
+                          <label className="font-semibold text-slate-200 flex items-center gap-2">
+                            <span>{activeProvider.name} API Keys (Auto-Rotated)</span>
+                            <button
+                              type="button"
+                              onClick={() => setShowApiKeys(!showApiKeys)}
+                              className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/10 hover:bg-white/15 text-slate-300 border border-white/10 flex items-center gap-1 transition"
+                              title={showApiKeys ? "Mask keys" : "Reveal / Edit keys"}
+                            >
+                              {showApiKeys ? <EyeOff size={11} className="text-amber-400" /> : <Eye size={11} className="text-cyan-400" />}
+                              <span>{showApiKeys ? "Hide (****)" : "Show / Edit Keys"}</span>
+                            </button>
                           </label>
                           {activeProvider.consoleUrl && (
                             <a
@@ -1635,26 +1740,52 @@ export function MenuControlCenterWindow({
                             </a>
                           )}
                         </div>
-                        <textarea
-                          rows={3}
-                          value={activeProvider.apiKey}
-                          onChange={(e) =>
-                            handleUpdateProvider(activeProvider.id, {
-                              apiKey: e.target.value,
-                              status: extractKeysList(e.target.value).length > 0 ? "ready" : "missing_key",
-                            })
-                          }
-                          placeholder={
-                            activeProvider.id === "openrouter"
-                              ? "freellmapi-xxxxxxxxxxxxxxxxxxxxxxxx\n(Paste multiple keys here — one key per line)"
-                              : "sk-...\nsk-...\n(Paste multiple keys here — one key per line)"
-                          }
-                          className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition"
-                        />
-                        <div className="text-[11px] text-slate-400">
-                          {activeProvider.id === "openrouter"
-                            ? "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)"
-                            : "One key per line — rotated automatically to dodge rate limits."}
+
+                        {showApiKeys || !activeProvider.apiKey.trim() ? (
+                          <textarea
+                            rows={3}
+                            value={activeProvider.apiKey}
+                            onChange={(e) =>
+                              handleUpdateProvider(activeProvider.id, {
+                                apiKey: e.target.value,
+                                status: extractKeysList(e.target.value).length > 0 ? "ready" : "missing_key",
+                              })
+                            }
+                            placeholder={
+                              activeProvider.id === "openrouter"
+                                ? "freellmapi-xxxxxxxxxxxxxxxxxxxxxxxx\n(Paste multiple keys here — one key per line)"
+                                : "sk-...\nsk-...\n(Paste multiple keys here — one key per line)"
+                            }
+                            className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition"
+                          />
+                        ) : (
+                          <div
+                            onClick={() => setShowApiKeys(true)}
+                            className="cursor-pointer group p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-400 space-y-1 hover:border-cyan-400/50 transition"
+                            title="Click to reveal and edit keys"
+                          >
+                            {activeProvider.apiKey.split("\n").filter((l) => l.trim()).map((line, idx) => {
+                              const t = line.trim();
+                              const masked = t.length <= 6 ? "••••••••••••••••" : `${t.slice(0, 4)}••••••••••••••••`;
+                              return (
+                                <div key={idx} className="flex items-center justify-between">
+                                  <span className="text-slate-200 tracking-wider font-mono">{masked}</span>
+                                  <span className="text-[10px] text-cyan-400/70 opacity-0 group-hover:opacity-100 transition">Click to edit</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                          <span>
+                            {activeProvider.id === "openrouter"
+                              ? "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)"
+                              : "One key per line — rotated automatically to dodge rate limits."}
+                          </span>
+                          {!showApiKeys && activeProvider.apiKey.trim() && (
+                            <span className="text-[10px] text-emerald-400 font-mono">🔒 Keys securely masked</span>
+                          )}
                         </div>
                       </div>
                     )}
@@ -3508,7 +3639,7 @@ export function MenuControlCenterWindow({
             {/* 7. SKILL FORGE TAB */}
             {activeTab === "skills" && (
               <div className="space-y-6 max-w-3xl">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-bold text-white flex items-center gap-2">
                       <Wrench size={18} className="text-cyan-400" />
@@ -3518,13 +3649,22 @@ export function MenuControlCenterWindow({
                       Active procedural system skills available for instant voice or text reflex execution.
                     </p>
                   </div>
-                  <button
-                    onClick={() => setActiveTab("plugins")}
-                    className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition"
-                  >
-                    <Plus size={14} />
-                    <span>Forge New Custom Skill</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleOpenCreateSkill}
+                      className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-lg shadow-cyan-500/20"
+                    >
+                      <Plus size={14} />
+                      <span>+ Add New Skill</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab("plugins")}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-slate-200 font-bold text-xs flex items-center gap-1.5 border border-white/10 transition"
+                    >
+                      <Sparkles size={14} className="text-amber-400" />
+                      <span>Forge with AI</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -3549,22 +3689,155 @@ export function MenuControlCenterWindow({
                         <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
                           {skill.description}
                         </p>
+                        {skill.trigger && (
+                          <div className="mt-2 text-[10px] font-mono text-cyan-300/80 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/30 inline-block">
+                            Trigger: "{skill.trigger}"
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                        <span className="text-[10px] font-mono text-cyan-300">{skill.category}</span>
-                        <button
-                          disabled={skillRunning === skill.id}
-                          onClick={() => handleRunSkill(skill)}
-                          className="px-3 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-50"
-                        >
-                          <Play size={12} />
-                          <span>{skillRunning === skill.id ? "Running..." : "Run Now"}</span>
-                        </button>
+                        <span className="text-[10px] font-mono text-cyan-300 uppercase tracking-wider">{skill.category}</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenEditSkill(skill)}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-slate-300 hover:text-white transition"
+                            title="Edit Skill"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSkill(skill)}
+                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 hover:text-red-200 transition"
+                            title="Delete Skill"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                          <button
+                            disabled={skillRunning === skill.id}
+                            onClick={() => handleRunSkill(skill)}
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-50"
+                          >
+                            <Play size={12} />
+                            <span>{skillRunning === skill.id ? "Running..." : "Run Now"}</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
                 </div>
+
+                {/* Skill Editor Modal */}
+                {(isCreatingSkill || editingSkill !== null) && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+                    <div className="w-full max-w-lg bg-slate-900 border border-cyan-400/30 rounded-2xl p-6 shadow-2xl space-y-4">
+                      <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                          <Wrench size={16} className="text-cyan-400" />
+                          <span>{isCreatingSkill ? "Create New Angel Skill" : `Edit Skill: ${editingSkill?.name}`}</span>
+                        </h3>
+                        <button
+                          onClick={() => {
+                            setIsCreatingSkill(false);
+                            setEditingSkill(null);
+                          }}
+                          className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3 text-xs">
+                        <div>
+                          <label className="font-semibold text-slate-300 block mb-1">Skill Name</label>
+                          <input
+                            type="text"
+                            value={skillFormName}
+                            onChange={(e) => setSkillFormName(e.target.value)}
+                            placeholder="e.g. Restart Audio Service"
+                            className="w-full p-2 rounded-xl bg-black/60 border border-white/15 text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="font-semibold text-slate-300 block mb-1">Description</label>
+                          <input
+                            type="text"
+                            value={skillFormDesc}
+                            onChange={(e) => setSkillFormDesc(e.target.value)}
+                            placeholder="What this skill accomplishes"
+                            className="w-full p-2 rounded-xl bg-black/60 border border-white/15 text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="font-semibold text-slate-300 block mb-1">Trigger Phrases (comma-separated)</label>
+                          <input
+                            type="text"
+                            value={skillFormTriggers}
+                            onChange={(e) => setSkillFormTriggers(e.target.value)}
+                            placeholder="restart audio, fix sound, reset audio service"
+                            className="w-full p-2 rounded-xl bg-black/60 border border-white/15 text-slate-100 font-mono text-[11px] focus:outline-none focus:border-cyan-400 transition"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="font-semibold text-slate-300 block mb-1">Action Type</label>
+                          <select
+                            value={skillFormActionType}
+                            onChange={(e) => setSkillFormActionType(e.target.value)}
+                            className="w-full p-2 rounded-xl bg-slate-950 border border-white/15 text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          >
+                            <option value="powershell">POWERSHELL (Native Windows Automation)</option>
+                            <option value="http_rest">HTTP_REST (REST API Endpoint / cURL)</option>
+                            <option value="prompt_tool">PROMPT_TOOL (Cognitive AI Directive)</option>
+                            <option value="shell_exec">SHELL_EXEC (Launch Executable)</option>
+                            <option value="open_url">OPEN_URL (Open Browser Link)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="font-semibold text-slate-300 block mb-1">
+                            Command / Endpoint / Payload
+                          </label>
+                          <textarea
+                            rows={4}
+                            value={skillFormPayload}
+                            onChange={(e) => setSkillFormPayload(e.target.value)}
+                            placeholder={
+                              skillFormActionType === "http_rest"
+                                ? '{"url": "https://api.example.com", "method": "GET"}'
+                                : "Restart-Service Audiosrv -Force"
+                            }
+                            className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-[11px] text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          />
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            Use {"{{USER_INPUT}}"} for user arguments, or $env:ANGEL_USER_INPUT. Zero terminal window flashes.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+                        <button
+                          onClick={() => {
+                            setIsCreatingSkill(false);
+                            setEditingSkill(null);
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveSkill}
+                          className="px-4 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition flex items-center gap-1.5"
+                        >
+                          <Save size={13} />
+                          <span>Save Skill</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

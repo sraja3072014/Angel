@@ -996,6 +996,8 @@ pub fn run() {
             plugin_forge::forge_new_skill,
             plugin_forge::plugin_forge_execute,
             plugin_forge::plugin_forge_delete,
+            plugin_forge::update_forged_skill,
+            plugin_forge::delete_forged_skill,
             plugin_forge::plugin_forge_match_and_run,
             plugin_forge::run_forged_skill,
             plugin_forge::list_forged_skills,

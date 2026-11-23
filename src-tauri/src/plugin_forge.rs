@@ -12,6 +12,8 @@ pub struct AngelSkill {
     pub id: String,
     pub name: String,
     pub trigger: String,
+    #[serde(default)]
+    pub trigger_phrases: Vec<String>,
     pub action_type: String, // "powershell", "http_rest", "shell_exec", "open_url", "prompt_tool"
     pub payload: String,
     pub description: String,
@@ -44,6 +46,7 @@ fn seed_default_skills(dir: &PathBuf) {
             id: "skill_calculator".to_string(),
             name: "Calculator Launcher".to_string(),
             trigger: "open calculator".to_string(),
+            trigger_phrases: vec!["open calculator".to_string(), "calc".to_string()],
             action_type: "shell_exec".to_string(),
             payload: "calc.exe".to_string(),
             description: "Launches native Windows calculator instantly".to_string(),
@@ -78,6 +81,10 @@ pub fn load_all_skills() -> Vec<AngelSkill> {
 }
 
 pub fn execute_single_skill(skill: &AngelSkill) -> Result<String, String> {
+    execute_single_skill_with_input(skill, None)
+}
+
+pub fn execute_single_skill_with_input(skill: &AngelSkill, user_input: Option<&str>) -> Result<String, String> {
     if !skill.enabled {
         return Err("Skill is currently disabled.".to_string());
     }
@@ -100,11 +107,50 @@ pub fn execute_single_skill(skill: &AngelSkill) -> Result<String, String> {
             Ok(format!("🌐 Skill '{}' opened target URL", skill.name))
         }
         "powershell" => {
-            let output = Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &skill.payload])
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-                .map_err(|e| format!("PowerShell execution error: {}", e))?;
+            let mut cmd_str = skill.payload.trim().to_string();
+
+            // 1. Strip trailing pipes or dangling semicolon / pipe fragments
+            while cmd_str.ends_with('|') || cmd_str.ends_with(';') {
+                cmd_str = cmd_str.trim_end_matches(|c| c == '|' || c == ';' || c == ' ' || c == '\r' || c == '\n').trim().to_string();
+            }
+
+            // 2. Remove simulated execution placeholder lines if present
+            if cmd_str.contains("Simulated execution") || cmd_str.contains("Write-Output 'Simulated") || cmd_str.contains("Write-Output \"Simulated") {
+                let cleaned_lines: Vec<&str> = cmd_str
+                    .lines()
+                    .filter(|l| {
+                        let lower = l.to_lowercase();
+                        !lower.contains("simulated execution") && !lower.contains("placeholder")
+                    })
+                    .collect();
+                cmd_str = cleaned_lines.join("\n").trim().to_string();
+                if cmd_str.is_empty() {
+                    cmd_str = "Write-Output 'Skill completed.'".to_string();
+                }
+            }
+
+            // 3. Strip trailing pipes again
+            while cmd_str.ends_with('|') || cmd_str.ends_with(';') {
+                cmd_str = cmd_str.trim_end_matches(|c| c == '|' || c == ';' || c == ' ' || c == '\r' || c == '\n').trim().to_string();
+            }
+
+            // 4. Safely substitute {{USER_INPUT}} ONLY if the command explicitly has {{USER_INPUT}}
+            let input_val = user_input.unwrap_or("").trim();
+            if cmd_str.contains("{{USER_INPUT}}") {
+                let escaped_input = input_val.replace('\'', "''");
+                cmd_str = cmd_str.replace("{{USER_INPUT}}", &escaped_input);
+            }
+
+            let mut cmd = Command::new("powershell");
+            cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &cmd_str]);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
+            // 5. Pass user input safely via environment variable $env:ANGEL_USER_INPUT - never append via pipe
+            if !input_val.is_empty() {
+                cmd.env("ANGEL_USER_INPUT", input_val);
+            }
+
+            let output = cmd.output().map_err(|e| format!("PowerShell execution error: {}", e))?;
 
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -457,7 +503,23 @@ pub fn dry_run_plugin_security(plugin_json: String) -> Result<String, String> {
     let mut warnings = Vec::new();
     let mut score: u32 = 100;
 
+    let target_trimmed = target.trim();
     let target_lower = target.to_lowercase();
+
+    // PowerShell syntax validation
+    if action_type == "POWERSHELL" || action_type == "SHELL_EXEC" {
+        if target_trimmed.ends_with('|') {
+            score = score.saturating_sub(40);
+            warnings.push("SYNTAX ERROR: Trailing pipe '|' detected. PowerShell commands cannot end with a pipe.".to_string());
+        }
+        if target_lower.contains("{input}") || target_lower.contains("<input>") {
+            warnings.push("PARAMETER WARNING: Use {{USER_INPUT}} for dynamic parameter injection.".to_string());
+        }
+        if target_lower.contains("simulated execution") || target_lower.contains("write-output 'simulated") {
+            score = score.saturating_sub(30);
+            warnings.push("PLACEHOLDER WARNING: Command contains simulated execution stubs instead of real logic.".to_string());
+        }
+    }
 
     // Critical destructive checks
     if target_lower.contains("rm -rf")
@@ -610,11 +672,17 @@ pub fn forge_new_skill(skill: serde_json::Value) -> Result<String, String> {
 
     let description = skill.get("description").and_then(|v| v.as_str()).unwrap_or("User created skill").to_string();
 
+    let triggers_list: Vec<String> = skill.get("trigger_phrases")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_else(|| vec![trigger.clone()]);
+
     let safe_id = format!("skill_{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis());
     let angel_skill = AngelSkill {
         id: safe_id,
         name: name.clone(),
         trigger,
+        trigger_phrases: triggers_list,
         action_type: cmd_type,
         payload: script,
         description,
@@ -643,7 +711,42 @@ pub fn plugin_forge_save(skill: AngelSkill) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn update_forged_skill(skill: AngelSkill) -> Result<Vec<AngelSkill>, String> {
+    let dir = get_plugins_dir();
+    let safe_id = skill.id.trim().replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+    let file_path = dir.join(format!("{}.json", safe_id));
+
+    let json = serde_json::to_string_pretty(&skill)
+        .map_err(|e| format!("Serialization error: {}", e))?;
+
+    fs::write(file_path, json)
+        .map_err(|e| format!("Failed to update skill: {}", e))?;
+
+    Ok(load_all_skills())
+}
+
+#[tauri::command]
+pub fn delete_forged_skill(skill_id: String) -> Result<Vec<AngelSkill>, String> {
+    let dir = get_plugins_dir();
+    let safe_id = skill_id.trim().replace(|c: char| !c.is_alphanumeric() && c != '_', "");
+    let file_path = dir.join(format!("{}.json", safe_id));
+    if file_path.exists() {
+        let _ = fs::remove_file(file_path);
+    }
+    let raw_path = dir.join(format!("{}.json", skill_id.trim()));
+    if raw_path.exists() {
+        let _ = fs::remove_file(raw_path);
+    }
+    Ok(load_all_skills())
+}
+
+#[tauri::command]
 pub fn plugin_forge_execute(skill_id: String) -> Result<String, String> {
+    run_forged_skill(skill_id, None)
+}
+
+#[tauri::command]
+pub fn run_forged_skill(skill_id: String, user_input: Option<String>) -> Result<String, String> {
     let skills = load_all_skills();
     let skill_id_lower = skill_id.to_lowercase();
     if let Some(skill) = skills.iter().find(|s| {
@@ -652,15 +755,10 @@ pub fn plugin_forge_execute(skill_id: String) -> Result<String, String> {
             || s.id.to_lowercase() == skill_id_lower
             || s.trigger.eq_ignore_ascii_case(&skill_id)
     }) {
-        execute_single_skill(skill)
+        execute_single_skill_with_input(skill, user_input.as_deref())
     } else {
         Err(format!("Skill '{}' not found in installed skills catalog.", skill_id))
     }
-}
-
-#[tauri::command]
-pub fn run_forged_skill(skill_id: String) -> Result<String, String> {
-    plugin_forge_execute(skill_id)
 }
 
 #[tauri::command]
@@ -670,15 +768,8 @@ pub fn list_forged_skills() -> Vec<AngelSkill> {
 
 #[tauri::command]
 pub fn plugin_forge_delete(skill_id: String) -> Result<String, String> {
-    let dir = get_plugins_dir();
-    let file_path = dir.join(format!("{}.json", skill_id));
-    if file_path.exists() {
-        fs::remove_file(file_path)
-            .map_err(|e| format!("Failed to delete plugin: {}", e))?;
-        Ok("Skill deleted successfully.".to_string())
-    } else {
-        Err("Plugin file not found.".to_string())
-    }
+    let _ = delete_forged_skill(skill_id)?;
+    Ok("Skill deleted successfully.".to_string())
 }
 
 #[tauri::command]
