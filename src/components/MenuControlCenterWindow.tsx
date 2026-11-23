@@ -1003,11 +1003,11 @@ export function MenuControlCenterWindow({
   ];
 
   return (
-    <div className="h-screen w-screen p-2.5 flex items-center justify-center bg-transparent select-none overflow-hidden font-sans text-white">
+    <div className="w-full h-full flex flex-col bg-transparent select-none overflow-hidden font-sans text-white box-border">
       {/* Translucent Dark Obsidian Glass Frame */}
       <div
         data-tauri-drag-region
-        className="w-full h-full rounded-2xl border border-cyan-400/40 bg-slate-950/90 backdrop-blur-3xl shadow-[0_0_60px_rgba(0,240,255,0.22)] flex flex-col overflow-hidden relative"
+        className="w-full h-full rounded-2xl border border-cyan-400/40 bg-slate-950/90 backdrop-blur-3xl shadow-[0_0_60px_rgba(0,240,255,0.22)] flex flex-col overflow-hidden relative box-border"
       >
         {/* Custom Glass Titlebar */}
         <div
@@ -1098,7 +1098,7 @@ export function MenuControlCenterWindow({
           </aside>
 
           {/* Right Main Content Pane */}
-          <main className="flex-1 overflow-y-auto p-6 bg-slate-950/40 relative">
+          <main className="flex-1 min-w-0 overflow-y-auto p-6 bg-slate-950/40 relative">
             {/* 1. GENERAL TAB */}
             {activeTab === "general" && (
               <div className="space-y-6 max-w-3xl">

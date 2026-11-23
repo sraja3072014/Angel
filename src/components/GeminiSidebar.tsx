@@ -12,13 +12,22 @@ import {
   CheckCircle2,
 } from "lucide-react";
 
+export interface ChatSession {
+  id: string;
+  title: string;
+  timestamp: string;
+  messages: any[];
+}
+
 interface GeminiSidebarProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onNewChat: () => void;
   onOpenMenu?: () => void;
   onSelectPrompt?: (prompt: string) => void;
-  currentChatId?: string;
+  currentChatId?: string | null;
+  sessions?: ChatSession[];
+  onSelectSession?: (session: ChatSession) => void;
 }
 
 export function GeminiSidebar({
@@ -27,19 +36,17 @@ export function GeminiSidebar({
   onNewChat,
   onOpenMenu,
   onSelectPrompt,
+  currentChatId,
+  sessions,
+  onSelectSession,
 }: GeminiSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [activeItem, setActiveItem] = useState<string>("chat");
 
-  const recentChats = [
-    { id: "1", title: "System Security & RAM Check", time: "10m ago" },
-    { id: "2", title: "Windows 11 Volume & Screenshots", time: "1h ago" },
-    { id: "3", title: "Open-Meteo Weather Koduvai API", time: "Yesterday" },
-    { id: "4", title: "Three.js Ambient Hologram Earth", time: "2d ago" },
-  ];
+  const displayChats = sessions && sessions.length > 0 ? sessions : [];
 
-  const filteredChats = recentChats.filter((c) =>
+  const filteredChats = displayChats.filter((c) =>
     c.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -184,20 +191,45 @@ export function GeminiSidebar({
         {/* Recent Conversations List */}
         {!collapsed && (
           <div className="mt-2 flex flex-col gap-1 overflow-hidden">
-            <div className="text-[11px] font-mono tracking-wider text-slate-400 uppercase px-2 mb-1">
-              Recent
+            <div className="text-[11px] font-mono tracking-wider text-slate-400 uppercase px-2 mb-1 flex items-center justify-between">
+              <span>Recent</span>
+              {displayChats.length > 0 && (
+                <span className="text-[10px] text-cyan-400 font-bold">{displayChats.length}</span>
+              )}
             </div>
             <div className="flex flex-col gap-0.5 overflow-y-auto max-h-48 pr-1">
-              {filteredChats.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => onSelectPrompt?.(`Load conversation topic: ${c.title}`)}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-white/10 text-xs text-slate-300 hover:text-white flex items-center gap-2 group transition"
-                >
-                  <MessageSquare size={13} className="text-slate-500 group-hover:text-cyan-300 shrink-0" />
-                  <span className="truncate flex-1">{c.title}</span>
-                </button>
-              ))}
+              {filteredChats.length > 0 ? (
+                filteredChats.map((c) => {
+                  const isActive = currentChatId === c.id;
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        if (onSelectSession) {
+                          onSelectSession(c);
+                        } else {
+                          onSelectPrompt?.(`Load conversation topic: ${c.title}`);
+                        }
+                      }}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center gap-2 group transition ${
+                        isActive
+                          ? "bg-cyan-950/40 border border-cyan-400/30 text-cyan-200 font-semibold"
+                          : "hover:bg-white/10 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      <MessageSquare
+                        size={13}
+                        className={isActive ? "text-cyan-400 shrink-0" : "text-slate-500 group-hover:text-cyan-300 shrink-0"}
+                      />
+                      <span className="truncate flex-1">{c.title}</span>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="px-2 py-3 text-[11px] text-slate-500 italic text-center">
+                  {searchQuery ? "No matching chats" : "No past chats yet"}
+                </div>
+              )}
             </div>
           </div>
         )}

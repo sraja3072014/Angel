@@ -312,11 +312,15 @@ export function loadAIProviders(): AIProviderConfig[] {
       }
     } catch {}
 
-    // Sync legacy geminiKey if needed
+    // Sync legacy geminiKey and angel_gemini_key if needed
+    const rawLegacyGemini =
+      localStorage.getItem("angel_gemini_key") ||
+      localStorage.getItem("gemini_api_key") ||
+      cfg.geminiKey;
     const gemini = merged.find((p) => p.id === "gemini");
     if (gemini) {
-      if (cfg.geminiKey && !gemini.apiKey) {
-        gemini.apiKey = cfg.geminiKey;
+      if (rawLegacyGemini && !gemini.apiKey) {
+        gemini.apiKey = rawLegacyGemini;
       }
       gemini.status = extractKeysList(gemini.apiKey).length > 0 ? "ready" : "missing_key";
     }
@@ -340,6 +344,7 @@ export function saveAIProviders(providers: AIProviderConfig[]) {
     if (gemini) {
       const firstKey = extractKeysList(gemini.apiKey)[0] || "";
       if (firstKey) {
+        localStorage.setItem("angel_gemini_key", firstKey);
         const cfg = loadAngelConfig();
         saveAngelConfig({ ...cfg, geminiKey: firstKey });
       }
@@ -465,18 +470,39 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
 
     if (provider.id === "gemini") {
       if (!activeKey) return { ok: false, message: "Gemini API key is required" };
-      const ai = new GoogleGenAI({ apiKey: activeKey });
+      const trimmedKey = activeKey.trim();
       const rawTarget = (provider.defaultModel || "gemini-3.8-flash").replace(/^(models\/)+/, "").trim();
       const targetModel =
         rawTarget.includes("2.5") || rawTarget.includes("3.5") || rawTarget.includes("2.0") || rawTarget.includes("1.5")
           ? "gemini-3.8-flash"
           : rawTarget;
-      await ai.models.generateContent({
-        model: targetModel,
-        contents: "Respond with 'ok'",
-      });
-      const latencyMs = Math.round(performance.now() - startTime);
-      return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
+
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${encodeURIComponent(trimmedKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: "ping" }] }],
+            }),
+          }
+        );
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
+        }
+        const err = await res.json().catch(() => ({}));
+        return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
+      } catch {
+        const ai = new GoogleGenAI({ apiKey: trimmedKey });
+        await ai.models.generateContent({
+          model: targetModel,
+          contents: "Respond with 'ok'",
+        });
+        const latencyMs = Math.round(performance.now() - startTime);
+        return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
+      }
     }
 
     if (provider.id === "anthropic") {

@@ -38,7 +38,7 @@ import { AngelVoiceEngine } from "./services/voiceEngine";
 import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
 import { HoloEarthStage } from "./components/HoloEarthStage";
-import { GeminiSidebar } from "./components/GeminiSidebar";
+import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
 
 interface ChatMessage {
   id: string;
@@ -127,6 +127,23 @@ export default function App() {
   const [showMoreUploads, setShowMoreUploads] = useState(false);
 
   // Chat & Conversation State
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    try {
+      const raw = localStorage.getItem("angel_chat_sessions");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const saveSessions = (updated: ChatSession[]) => {
+    setSessions(updated);
+    try {
+      localStorage.setItem("angel_chat_sessions", JSON.stringify(updated));
+    } catch {}
+  };
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -243,8 +260,23 @@ export default function App() {
       timestamp: formattedTime,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const updatedUserMsgs = [...messages, userMsg];
+    setMessages(updatedUserMsgs);
     setIsProcessing(true);
+
+    let activeSessionId = currentSessionId;
+    if (!activeSessionId) {
+      activeSessionId = `session_${Date.now()}`;
+      setCurrentSessionId(activeSessionId);
+      const title = prompt.trim().slice(0, 36) + (prompt.length > 36 ? "..." : "");
+      const newSession: ChatSession = {
+        id: activeSessionId,
+        title,
+        timestamp: "Just now",
+        messages: updatedUserMsgs,
+      };
+      saveSessions([newSession, ...sessions.filter((s) => s.id !== activeSessionId)]);
+    }
 
     const assistantMsgId = `assistant_${Date.now()}`;
     const initialAssistantMsg: ChatMessage = {
@@ -254,7 +286,7 @@ export default function App() {
       timestamp: formattedTime,
     };
 
-    setMessages((prev) => [...prev, initialAssistantMsg]);
+    setMessages([...updatedUserMsgs, initialAssistantMsg]);
 
     try {
       // 1. Check local Rust OS reflex if in Task mode or standard prompt
@@ -263,22 +295,33 @@ export default function App() {
           const localRes = await invoke<string>("execute_os_reflex", { command: prompt });
           if (localRes !== "CLOUD_BRAIN") {
             incrementUsageTelemetry("reflex");
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, text: localRes, actionExecuted: "OS Reflex Executed" }
-                  : m
-              )
-            );
-            setIsProcessing(false);
+            const reflexMsgs = [
+              ...updatedUserMsgs,
+              { id: assistantMsgId, role: "assistant" as const, text: localRes, actionExecuted: "OS Reflex Executed", timestamp: formattedTime },
+            ];
+            setMessages(reflexMsgs);
+            if (activeSessionId) {
+              setSessions((prev) => {
+                const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: reflexMsgs } : s));
+                try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+                return sUpdated;
+              });
+            }
             voiceRef.current?.speak(localRes, () => setSpeaking(true), () => setSpeaking(false));
             return;
           }
         } catch {}
       }
 
-      // 2. Query Gemini AI with streaming response
-      const fullReply = await brain.askGemini(prompt, {
+      // 2. Query Gemini/Cloud Brain with streaming and 25s timeout safeguard
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("AI response timed out after 25s. Check network connectivity or API key quota.")),
+          25000
+        )
+      );
+
+      const queryPromise = brain.askGemini(prompt, {
         screenBase64: screenB64,
         onChunk: (chunk) => {
           setMessages((prev) =>
@@ -290,17 +333,34 @@ export default function App() {
         },
       });
 
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantMsgId ? { ...m, text: fullReply } : m))
-      );
+      const fullReply = await Promise.race([queryPromise, timeoutPromise]);
+
+      const finalMsgs = [
+        ...updatedUserMsgs,
+        { id: assistantMsgId, role: "assistant" as const, text: fullReply, timestamp: formattedTime },
+      ];
+      setMessages(finalMsgs);
+      if (activeSessionId) {
+        setSessions((prev) => {
+          const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: finalMsgs } : s));
+          try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+          return sUpdated;
+        });
+      }
     } catch (err: any) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsgId
-            ? { ...m, text: `⚠️ Error processing request: ${err?.message || err}` }
-            : m
-        )
-      );
+      const errText = `⚠️ Error processing request: ${err?.message || err}`;
+      const errMsgs = [
+        ...updatedUserMsgs,
+        { id: assistantMsgId, role: "assistant" as const, text: errText, timestamp: formattedTime },
+      ];
+      setMessages(errMsgs);
+      if (activeSessionId) {
+        setSessions((prev) => {
+          const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: errMsgs } : s));
+          try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+          return sUpdated;
+        });
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -309,7 +369,17 @@ export default function App() {
   // Clear / New Chat
   const handleNewChat = () => {
     setMessages([]);
+    setCurrentSessionId(null);
     setInput("");
+    setIsProcessing(false);
+    setMicErrorMessage(null);
+  };
+
+  const handleSelectSession = (session: ChatSession) => {
+    setCurrentSessionId(session.id);
+    setMessages(session.messages || []);
+    setInput("");
+    setIsProcessing(false);
     setMicErrorMessage(null);
   };
 
@@ -382,6 +452,9 @@ export default function App() {
         onNewChat={handleNewChat}
         onOpenMenu={() => setActiveModal({ type: "menu", tab: "general" })}
         onSelectPrompt={(p) => handleSendMessage(p)}
+        sessions={sessions}
+        currentChatId={currentSessionId}
+        onSelectSession={handleSelectSession}
       />
 
       {/* 3. MAIN WORKSPACE */}
@@ -389,7 +462,14 @@ export default function App() {
         {/* TOP HEADER BAR */}
         <header
           data-tauri-drag-region
-          className="h-14 px-4 bg-slate-950/40 border-b border-white/10 backdrop-blur-xl flex items-center justify-between shrink-0 select-none"
+          onMouseDown={(e) => {
+            if (e.button === 0 && !(e.target as HTMLElement).closest("button, input, textarea, a, select")) {
+              try {
+                getCurrentWebviewWindow().startDragging();
+              } catch {}
+            }
+          }}
+          className="h-14 px-4 bg-slate-950/40 border-b border-white/10 backdrop-blur-xl flex items-center justify-between shrink-0 select-none cursor-default"
         >
           {/* Left side: clean live clock telemetry */}
           <div className="flex items-center gap-2">
@@ -831,8 +911,8 @@ export default function App() {
 
       {/* Master Control Center Glass Modal Overlay */}
       {activeModal?.type === "menu" && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/75 backdrop-blur-xl animate-in fade-in duration-150">
-          <div className="w-full h-full max-w-6xl max-h-[92vh] rounded-3xl overflow-hidden shadow-2xl border border-cyan-400/40 relative flex flex-col">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xl animate-in fade-in duration-150">
+          <div className="w-full h-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col box-border z-50 shadow-2xl">
             <MenuControlCenterWindow
               initialTab={activeModal.tab}
               onClose={() => setActiveModal(null)}
