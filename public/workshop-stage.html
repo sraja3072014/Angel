@@ -1,0 +1,1196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Angel AI 3D Workshop Stage</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at 50% 45%, #0a1122 0%, #030712 70%, #000000 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #e2e8f0;
+    }
+    #stage-container {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    canvas#stage-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      outline: none;
+    }
+    /* SVG Overlay for smart leader lines */
+    svg#labels-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+    /* HTML Cards Overlay for crisp labels */
+    #labels-container {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 20;
+      overflow: hidden;
+    }
+    .teardown-label {
+      position: absolute;
+      pointer-events: auto;
+      max-width: 240px;
+      padding: 8px 12px;
+      background: rgba(3, 7, 18, 0.88);
+      border: 1px solid rgba(6, 182, 212, 0.45);
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7), 0 0 15px rgba(6, 182, 212, 0.15);
+      backdrop-filter: blur(8px);
+      transition: transform 0.2s ease, border-color 0.2s ease, opacity 0.3s ease;
+      cursor: pointer;
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    .teardown-label.visible {
+      opacity: 1;
+      transform: scale(1);
+    }
+    .teardown-label:hover {
+      border-color: rgba(6, 182, 212, 0.9);
+      box-shadow: 0 4px 25px rgba(6, 182, 212, 0.35);
+      transform: scale(1.03);
+    }
+    .teardown-label .title {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #38bdf8;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .teardown-label .sub {
+      font-size: 9px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #94a3b8;
+      margin-top: 1px;
+    }
+    .teardown-label .desc {
+      font-size: 10px;
+      color: #cbd5e1;
+      margin-top: 4px;
+      line-height: 1.35;
+    }
+    /* Subtle Watermark Badge */
+    #stage-badge {
+      position: absolute;
+      bottom: 12px;
+      right: 14px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #94a3b8;
+      pointer-events: none;
+      z-index: 30;
+    }
+    #stage-badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #06b6d4;
+      box-shadow: 0 0 8px #06b6d4;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three.module.js",
+      "three/addons/controls/OrbitControls.js": "/vendor/OrbitControls.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="stage-container">
+    <canvas id="stage-canvas"></canvas>
+    <svg id="labels-svg"></svg>
+    <div id="labels-container"></div>
+    <div id="stage-badge">
+      <div class="dot"></div>
+      <span id="badge-text">ANGEL 3D WORKSHOP • 60 FPS</span>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ========================================================
+    // 1. STAGE & RENDERER SETUP
+    // ========================================================
+    const canvas = document.getElementById('stage-canvas');
+    const svgEl = document.getElementById('labels-svg');
+    const labelsContainer = document.getElementById('labels-container');
+    const badgeText = document.getElementById('badge-text');
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 2.5, 6.5);
+
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.minDistance = 1.8;
+    controls.maxDistance = 14.0;
+    controls.maxPolarAngle = Math.PI * 0.52; // Keep camera above floor
+    controls.target.set(0, 0.3, 0);
+
+    // Idle camera auto-rotation management
+    let isUserInteracting = false;
+    let idleTimer = null;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.6;
+
+    controls.addEventListener('start', () => {
+      isUserInteracting = true;
+      controls.autoRotate = false;
+      if (idleTimer) clearTimeout(idleTimer);
+    });
+
+    controls.addEventListener('end', () => {
+      isUserInteracting = false;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (!isUserInteracting) controls.autoRotate = true;
+      }, 3500);
+    });
+
+    // ========================================================
+    // 2. STUDIO LIGHTING & REFLECTIVE FLOOR
+    // ========================================================
+    const ambientLight = new THREE.AmbientLight(0x94a3b8, 0.75);
+    scene.add(ambientLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.6);
+    keyLight.position.set(4, 7, 5);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 1024;
+    keyLight.shadow.mapSize.height = 1024;
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 20;
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
+
+    const cyanRim = new THREE.DirectionalLight(0x06b6d4, 2.2);
+    cyanRim.position.set(-6, 3, -4);
+    scene.add(cyanRim);
+
+    const amberRim = new THREE.DirectionalLight(0xf59e0b, 1.8);
+    amberRim.position.set(5, 2, -5);
+    scene.add(amberRim);
+
+    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.8);
+    fillLight.position.set(0, -3, 3);
+    scene.add(fillLight);
+
+    // Dark reflective studio pedestal floor
+    const floorGeo = new THREE.CylinderGeometry(4.8, 5.0, 0.12, 64);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x050914,
+      metalness: 0.85,
+      roughness: 0.25,
+    });
+    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+    floorMesh.position.y = -1.2;
+    floorMesh.receiveShadow = true;
+    scene.add(floorMesh);
+
+    // Subtle radial floor glow ring
+    const ringGeo = new THREE.RingGeometry(4.75, 4.88, 64);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x06b6d4,
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+    });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.rotation.x = -Math.PI / 2;
+    ringMesh.position.y = -1.13;
+    scene.add(ringMesh);
+
+    // Base floor original Y for sinking
+    const baseFloorY = -1.2;
+
+    // ========================================================
+    // 3. THE "W" BUILDER KIT API
+    // ========================================================
+    const W = {
+      parts: [],
+      tickCallbacks: [],
+      explodeProgress: 0,
+      thermalMode: false,
+      currentProject: 'Angel_3D_Project',
+      telemetry: {
+        cpu_percent: 22,
+        ram_percent: 45,
+        health_score: 95,
+        cpu_temp_c: 38.5,
+        fan_rpm: 1150,
+      },
+
+      materials: {
+        brushedSteel: new THREE.MeshStandardMaterial({ color: 0x8f98a3, metalness: 0.85, roughness: 0.32 }),
+        titanium: new THREE.MeshStandardMaterial({ color: 0x5a6572, metalness: 0.92, roughness: 0.25 }),
+        brass: new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.88, roughness: 0.28 }),
+        copper: new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.9, roughness: 0.3 }),
+        anodizedBlack: new THREE.MeshStandardMaterial({ color: 0x18181b, metalness: 0.75, roughness: 0.25 }),
+        darkAlloy: new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.35 }),
+        pcbGreen: new THREE.MeshStandardMaterial({ color: 0x092618, metalness: 0.3, roughness: 0.6 }),
+        pcbMatteBlack: new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.4, roughness: 0.5 }),
+        chassisDark: new THREE.MeshStandardMaterial({ color: 0x090d16, metalness: 0.6, roughness: 0.45 }),
+        glass: new THREE.MeshPhysicalMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.28,
+          roughness: 0.08,
+          transmission: 0.88,
+          thickness: 0.4,
+        }),
+        combustionGlow: new THREE.MeshStandardMaterial({
+          color: 0xff6600,
+          emissive: 0xff4400,
+          emissiveIntensity: 1.8,
+          metalness: 0.4,
+          roughness: 0.4,
+        }),
+        heatTintTurbine: new THREE.MeshStandardMaterial({
+          color: 0x8b5cf6,
+          emissive: 0x4c1d95,
+          emissiveIntensity: 0.35,
+          metalness: 0.92,
+          roughness: 0.22,
+        }),
+        argbLed: new THREE.MeshBasicMaterial({ color: 0x00f0ff }),
+      },
+
+      metal(kind) {
+        if (kind === 'titanium') return this.materials.titanium.clone();
+        if (kind === 'brass') return this.materials.brass.clone();
+        if (kind === 'copper') return this.materials.copper.clone();
+        if (kind === 'black') return this.materials.anodizedBlack.clone();
+        return this.materials.brushedSteel.clone();
+      },
+
+      glass() {
+        return this.materials.glass.clone();
+      },
+
+      plastic(colorHex) {
+        return new THREE.MeshStandardMaterial({
+          color: colorHex,
+          metalness: 0.1,
+          roughness: 0.4,
+        });
+      },
+
+      add(obj, opts = {}) {
+        const id = 'part_' + (this.parts.length + 1);
+        const name = opts.name || id;
+        const label = opts.label || name;
+        const description = opts.description || '';
+        const explode = opts.explode || [0, 0, 0];
+
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+        obj.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.userData.partId = id;
+          }
+        });
+
+        // Compute anchor vertex for teardown label
+        let anchor = new THREE.Vector3();
+        const bbox = new THREE.Box3().setFromObject(obj);
+        bbox.getCenter(anchor);
+        // Offset anchor toward outer perimeter for cleaner leader lines
+        if (anchor.lengthSq() < 0.001) {
+          anchor.set(bbox.max.x * 0.85, (bbox.max.y + bbox.min.y) * 0.5, bbox.max.z * 0.85);
+        }
+
+        const partEntry = {
+          id,
+          name,
+          label,
+          description,
+          group: obj,
+          origPos: obj.position.clone(),
+          explodeVec: new THREE.Vector3(...explode),
+          anchorLocal: anchor.clone(),
+          anchorWorld: new THREE.Vector3(),
+          thermalTargets: [],
+        };
+
+        // Track thermal-reactive meshes
+        obj.traverse((child) => {
+          if (child.isMesh && child.material) {
+            partEntry.thermalTargets.push({
+              mesh: child,
+              origColor: child.material.color ? child.material.color.clone() : new THREE.Color(0xffffff),
+              origEmissive: child.material.emissive ? child.material.emissive.clone() : new THREE.Color(0x000000),
+            });
+          }
+        });
+
+        this.parts.push(partEntry);
+        scene.add(obj);
+        return obj;
+      },
+
+      onTick(fn) {
+        this.tickCallbacks.push(fn);
+      },
+
+      setExplode(val) {
+        this.explodeProgress = Math.max(0, Math.min(1, val));
+        let lowestY = 0;
+
+        for (const p of this.parts) {
+          p.group.position.copy(p.origPos).addScaledVector(p.explodeVec, this.explodeProgress);
+          if (p.group.position.y < lowestY) {
+            lowestY = p.group.position.y;
+          }
+        }
+
+        // Sink floor if parts travel downwards
+        floorMesh.position.y = baseFloorY + Math.min(0, lowestY * 0.8);
+        ringMesh.position.y = floorMesh.position.y + 0.07;
+      },
+
+      setThermalMode(enabled) {
+        this.thermalMode = enabled;
+        this.applyThermalTint();
+      },
+
+      applyThermalTint() {
+        const temp = this.telemetry.cpu_temp_c || 40;
+        // Thermal gradient: <40C Cyan (0x06b6d4), 40-70C Amber (0xf59e0b), >70C Red/Orange (0xef4444)
+        let thermalColor = new THREE.Color(0x06b6d4);
+        let emissiveIntensity = 0.2;
+
+        if (temp > 65) {
+          thermalColor = new THREE.Color(0xef4444);
+          emissiveIntensity = 0.7;
+        } else if (temp > 48) {
+          thermalColor = new THREE.Color(0xf59e0b);
+          emissiveIntensity = 0.45;
+        }
+
+        for (const p of this.parts) {
+          for (const item of p.thermalTargets) {
+            if (item.mesh.material && item.mesh.material.emissive) {
+              if (this.thermalMode) {
+                item.mesh.material.emissive.copy(thermalColor);
+                item.mesh.material.emissiveIntensity = emissiveIntensity;
+              } else {
+                item.mesh.material.emissive.copy(item.origEmissive);
+                item.mesh.material.emissiveIntensity = item.origEmissive.lengthSq() > 0 ? 1.0 : 0.0;
+              }
+            }
+          }
+        }
+      },
+
+      updateTelemetry(data) {
+        Object.assign(this.telemetry, data);
+        if (this.thermalMode) this.applyThermalTint();
+        badgeText.textContent = `ANGEL 3D WORKSHOP • CPU ${Math.round(this.telemetry.cpu_percent)}% • RAM ${Math.round(this.telemetry.ram_percent)}% • ${Math.round(this.telemetry.cpu_temp_c)}°C`;
+      },
+
+      clear() {
+        for (const p of this.parts) {
+          scene.remove(p.group);
+          p.group.traverse((c) => {
+            if (c.geometry) c.geometry.dispose();
+            if (c.material) {
+              if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
+              else c.material.dispose();
+            }
+          });
+        }
+        this.parts = [];
+        this.tickCallbacks = [];
+        this.explodeProgress = 0;
+        this.setExplode(0);
+        labelsContainer.innerHTML = '';
+        svgEl.innerHTML = '';
+      },
+
+      // ========================================================
+      // 4. ASCII STL EXPORTER FOR 3D PRINTING
+      // ========================================================
+      exportSTL() {
+        const files = [];
+        const normal = new THREE.Vector3();
+        const vA = new THREE.Vector3();
+        const vB = new THREE.Vector3();
+        const vC = new THREE.Vector3();
+
+        for (const part of this.parts) {
+          let stl = `solid ${part.name.replace(/[^a-zA-Z0-9_]/g, '_')}\n`;
+
+          part.group.traverse((child) => {
+            if (!child.isMesh || !child.geometry) return;
+            const geo = child.geometry.isBufferGeometry ? child.geometry : new THREE.BufferGeometry().fromGeometry(child.geometry);
+            const pos = geo.attributes.position;
+            const index = geo.index;
+            child.updateWorldMatrix(true, false);
+            const matrix = child.matrixWorld;
+
+            const writeTriangle = (a, b, c) => {
+              vA.fromBufferAttribute(pos, a).applyMatrix4(matrix);
+              vB.fromBufferAttribute(pos, b).applyMatrix4(matrix);
+              vC.fromBufferAttribute(pos, c).applyMatrix4(matrix);
+
+              // Calculate face normal
+              const cb = new THREE.Vector3().subVectors(vC, vB);
+              const ab = new THREE.Vector3().subVectors(vA, vB);
+              normal.crossVectors(cb, ab).normalize();
+
+              stl += `  facet normal ${normal.x.toFixed(5)} ${normal.y.toFixed(5)} ${normal.z.toFixed(5)}\n`;
+              stl += `    outer loop\n`;
+              stl += `      vertex ${vA.x.toFixed(5)} ${vA.y.toFixed(5)} ${vA.z.toFixed(5)}\n`;
+              stl += `      vertex ${vB.x.toFixed(5)} ${vB.y.toFixed(5)} ${vB.z.toFixed(5)}\n`;
+              stl += `      vertex ${vC.x.toFixed(5)} ${vC.y.toFixed(5)} ${vC.z.toFixed(5)}\n`;
+              stl += `    endloop\n`;
+              stl += `  endfacet\n`;
+            };
+
+            if (index) {
+              for (let i = 0; i < index.count; i += 3) {
+                writeTriangle(index.getX(i), index.getX(i + 1), index.getX(i + 2));
+              }
+            } else if (pos) {
+              for (let i = 0; i < pos.count; i += 3) {
+                writeTriangle(i, i + 1, i + 2);
+              }
+            }
+          });
+
+          stl += `endsolid ${part.name.replace(/[^a-zA-Z0-9_]/g, '_')}\n`;
+          const slug = part.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+          files.push({
+            filename: `${slug}.stl`,
+            content: stl,
+          });
+        }
+
+        window.parent.postMessage(
+          {
+            type: 'EXPORT_STL_PAYLOAD',
+            projectName: this.currentProject,
+            files,
+          },
+          '*'
+        );
+      },
+    };
+
+    // ========================================================
+    // 5. SHOWPIECE BUILDERS
+    // ========================================================
+
+    // --------------------------------------------------------
+    // BUILD 1: TWO-SPOOL TURBOFAN JET ENGINE
+    // --------------------------------------------------------
+    function buildTurbofanJetEngine() {
+      W.clear();
+      W.currentProject = 'Turbofan_Jet_Engine';
+      camera.position.set(0, 2.2, 5.8);
+      controls.target.set(0, 0, 0);
+
+      // 1. Maintenance Stand Cradle
+      const standGroup = new THREE.Group();
+      const cradleMat = W.materials.anodizedBlack;
+      const baseLeg1 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.18), cradleMat);
+      baseLeg1.position.set(0, -1.1, 0.9);
+      const baseLeg2 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.18), cradleMat);
+      baseLeg2.position.set(0, -1.1, -0.9);
+      const crossBeam1 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 1.8), cradleMat);
+      crossBeam1.position.set(-1.6, -1.1, 0);
+      const crossBeam2 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 1.8), cradleMat);
+      crossBeam2.position.set(1.6, -1.1, 0);
+      const strutL = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.9, 16), W.materials.titanium);
+      strutL.position.set(-1.2, -0.65, 0.6);
+      strutL.rotation.z = 0.25;
+      const strutR = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.9, 16), W.materials.titanium);
+      strutR.position.set(1.2, -0.65, 0.6);
+      strutR.rotation.z = -0.25;
+      standGroup.add(baseLeg1, baseLeg2, crossBeam1, crossBeam2, strutL, strutR);
+      W.add(standGroup, {
+        name: 'Maintenance Cradle Stand',
+        label: 'Support Truss',
+        explode: [0, -1.6, 0],
+        description: 'Heavy structural steel cradle holding engine trunnion mounts during overhaul.',
+      });
+
+      // 2. Concentric Low/High-Pressure Shafts
+      const shaftsGroup = new THREE.Group();
+      const lpShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.8, 24), W.metal('titanium'));
+      lpShaft.rotation.x = Math.PI / 2;
+      const hpShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.8, 24), W.metal('brushedSteel'));
+      hpShaft.rotation.x = Math.PI / 2;
+      hpShaft.position.z = -0.2;
+      shaftsGroup.add(lpShaft, hpShaft);
+      W.add(shaftsGroup, {
+        name: 'Concentric Drive Shafts',
+        label: 'Dual Co-Axial Spools',
+        explode: [0, -0.8, -0.5],
+        description: 'Inner N1 shaft spins the fan via LPT; outer N2 hollow shaft drives the HP compressor.',
+      });
+
+      // 3. 20-Blade Twisted Wide-Chord Fan & Spiral Spinner
+      const fanGroup = new THREE.Group();
+      const hubGeo = new THREE.CylinderGeometry(0.35, 0.42, 0.32, 32);
+      const hub = new THREE.Mesh(hubGeo, W.metal('titanium'));
+      hub.rotation.x = Math.PI / 2;
+      fanGroup.add(hub);
+
+      // Aerodynamic cone with spiral painted stripe
+      const spinnerGeo = new THREE.ConeGeometry(0.35, 0.65, 32);
+      const spinner = new THREE.Mesh(spinnerGeo, W.metal('black'));
+      spinner.rotation.x = -Math.PI / 2;
+      spinner.position.z = 0.48;
+      fanGroup.add(spinner);
+
+      // 20 Wide-chord twisted titanium blades
+      const bladeGeo = new THREE.BoxGeometry(0.07, 0.72, 0.12);
+      bladeGeo.translate(0, 0.48, 0);
+      for (let i = 0; i < 20; i++) {
+        const blade = new THREE.Mesh(bladeGeo, W.metal('titanium'));
+        const angle = (i / 20) * Math.PI * 2;
+        blade.rotation.z = angle;
+        blade.rotation.y = 0.38; // Pitch angle
+        fanGroup.add(blade);
+      }
+      fanGroup.position.z = 1.35;
+      W.add(fanGroup, {
+        name: 'Wide-Chord Titanium Fan',
+        label: '20-Blade N1 Rotor',
+        explode: [0, 0, 2.6],
+        description: 'Hollow titanium fan producing over 80% of total bypass thrust with spiral anti-bird spinner.',
+      });
+
+      // 4. Low-Pressure Booster Compressor
+      const boosterGroup = new THREE.Group();
+      for (let s = 0; s < 3; s++) {
+        const disk = new THREE.Mesh(new THREE.CylinderGeometry(0.48 - s * 0.04, 0.5 - s * 0.04, 0.12, 32), W.metal('brushedSteel'));
+        disk.rotation.x = Math.PI / 2;
+        disk.position.z = 0.95 - s * 0.18;
+        boosterGroup.add(disk);
+      }
+      W.add(boosterGroup, {
+        name: 'LP Booster Compressor',
+        label: '3-Stage Booster',
+        explode: [0, 0, 1.6],
+        description: 'Supercharges core inlet air directly behind the fan before entering the HP drum.',
+      });
+
+      // 5. High-Pressure Compressor Drum (9-Stage)
+      const hpcGroup = new THREE.Group();
+      for (let i = 0; i < 7; i++) {
+        const r = 0.42 - i * 0.03;
+        const disk = new THREE.Mesh(new THREE.CylinderGeometry(r, r + 0.015, 0.1, 32), W.metal('titanium'));
+        disk.rotation.x = Math.PI / 2;
+        disk.position.z = 0.35 - i * 0.13;
+        hpcGroup.add(disk);
+      }
+      W.add(hpcGroup, {
+        name: 'HP Compressor Drum',
+        label: 'High-Pressure Spool',
+        explode: [0, 0, 0.6],
+        description: 'Compresses air to over 40:1 pressure ratio before entering the annular combustor.',
+      });
+
+      // 6. Annular Combustion Chamber
+      const combustorGroup = new THREE.Group();
+      const combustorGeo = new THREE.CylinderGeometry(0.44, 0.44, 0.45, 32, 1, true);
+      const combustor = new THREE.Mesh(combustorGeo, W.materials.combustionGlow);
+      combustor.rotation.x = Math.PI / 2;
+      combustor.position.z = -0.55;
+      // 12 fuel nozzles
+      for (let n = 0; n < 12; n++) {
+        const ang = (n / 12) * Math.PI * 2;
+        const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.15, 8), W.metal('brass'));
+        nozzle.position.set(Math.cos(ang) * 0.48, Math.sin(ang) * 0.48, -0.55);
+        nozzle.rotation.z = ang + Math.PI / 2;
+        combustorGroup.add(nozzle);
+      }
+      combustorGroup.add(combustor);
+      W.add(combustorGroup, {
+        name: 'Annular Combustor',
+        label: 'Diffusion Burner',
+        explode: [1.8, 0, -0.4],
+        description: 'Mixes atomized jet fuel with compressed air, generating high-velocity 1700°C combustion gas.',
+      });
+
+      // 7. High-Pressure Turbine (HPT)
+      const hptGroup = new THREE.Group();
+      const hptDisk = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.12, 32), W.materials.heatTintTurbine);
+      hptDisk.rotation.x = Math.PI / 2;
+      hptDisk.position.z = -0.85;
+      hptGroup.add(hptDisk);
+      W.add(hptGroup, {
+        name: 'HP Single-Stage Turbine',
+        label: 'Cooled HPT Rotor',
+        explode: [0, 0, -1.2],
+        description: 'Single-crystal nickel superalloy blades extract energy from combustor gas to drive the compressor drum.',
+      });
+
+      // 8. Low-Pressure Turbine (LPT)
+      const lptGroup = new THREE.Group();
+      for (let t = 0; t < 4; t++) {
+        const tr = 0.46 + t * 0.04;
+        const lptDisk = new THREE.Mesh(new THREE.CylinderGeometry(tr, tr, 0.11, 32), W.metal('titanium'));
+        lptDisk.rotation.x = Math.PI / 2;
+        lptDisk.position.z = -1.1 - t * 0.15;
+        lptGroup.add(lptDisk);
+      }
+      W.add(lptGroup, {
+        name: 'LP 4-Stage Turbine',
+        label: 'N1 Drive Turbine',
+        explode: [0, 0, -2.2],
+        description: 'Extracts remaining thermal energy to rotate the front wide-chord fan via the concentric inner shaft.',
+      });
+
+      // 9. Split Nacelle Duct Casings (Upper & Lower)
+      const nacelleUpper = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.05, 0.95, 1.8, 32, 1, true, 0, Math.PI),
+        W.metal('brushedSteel')
+      );
+      nacelleUpper.rotation.x = Math.PI / 2;
+      nacelleUpper.position.set(0, 0, 0.5);
+      W.add(nacelleUpper, {
+        name: 'Upper Nacelle Cowling',
+        label: 'Acoustic Liner (Top)',
+        explode: [0, 2.0, 0.3],
+        description: 'Hinged acoustic casing with noise-suppression honeycomb mesh for airport flyover noise dampening.',
+      });
+
+      const nacelleLower = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.05, 0.95, 1.8, 32, 1, true, Math.PI, Math.PI),
+        W.metal('brushedSteel')
+      );
+      nacelleLower.rotation.x = Math.PI / 2;
+      nacelleLower.position.set(0, 0, 0.5);
+      W.add(nacelleLower, {
+        name: 'Lower Nacelle Cowling',
+        label: 'Acoustic Liner (Bottom)',
+        explode: [0, -1.9, 0.3],
+        description: 'Lower access cowl housing drain valves, starter connections, and inspection access doors.',
+      });
+
+      // 10. Exhaust Nozzle & Tailcone
+      const exhaustGroup = new THREE.Group();
+      const nozzleGeo = new THREE.CylinderGeometry(0.58, 0.42, 0.9, 32, 1, true);
+      const nozzle = new THREE.Mesh(nozzleGeo, W.metal('black'));
+      nozzle.rotation.x = Math.PI / 2;
+      nozzle.position.z = -1.9;
+      const coneGeo = new THREE.ConeGeometry(0.28, 1.1, 32);
+      const tailcone = new THREE.Mesh(coneGeo, W.metal('titanium'));
+      tailcone.rotation.x = -Math.PI / 2;
+      tailcone.position.z = -2.3;
+      exhaustGroup.add(nozzle, tailcone);
+      W.add(exhaustGroup, {
+        name: 'Core Exhaust & Tailcone',
+        label: 'Mixer Nozzle',
+        explode: [0, 0, -3.4],
+        description: 'Accelerates core exhaust stream and optimizes pressure distribution behind the LPT disks.',
+      });
+
+      // Continuous Spool Rotation Tick
+      W.onTick((delta) => {
+        if (W.explodeProgress < 0.98) {
+          fanGroup.rotation.z -= delta * 3.5;
+          boosterGroup.rotation.z -= delta * 3.5;
+          lptGroup.rotation.z -= delta * 3.5;
+          hpcGroup.rotation.z -= delta * 7.2; // High-pressure spool rotates faster
+          hptGroup.rotation.z -= delta * 7.2;
+        }
+      });
+    }
+
+    // --------------------------------------------------------
+    // BUILD 2: LIVE TELEMETRY GAMING PC DIGITAL TWIN
+    // --------------------------------------------------------
+    function buildGamingPCDigitalTwin() {
+      W.clear();
+      W.currentProject = 'Gaming_PC_Digital_Twin';
+      camera.position.set(0, 1.8, 5.2);
+      controls.target.set(0, 0.1, 0);
+
+      // Create dynamic 2D canvas for CPU Liquid Cooler Pump Head LCD
+      const lcdCanvas = document.createElement('canvas');
+      lcdCanvas.width = 256;
+      lcdCanvas.height = 256;
+      const lcdCtx = lcdCanvas.getContext('2d');
+      const lcdTexture = new THREE.CanvasTexture(lcdCanvas);
+
+      function updateLcdCanvas() {
+        const cpu = Math.round(W.telemetry.cpu_percent || 25);
+        const temp = Math.round(W.telemetry.cpu_temp_c || 42);
+        const ram = Math.round(W.telemetry.ram_percent || 48);
+
+        lcdCtx.fillStyle = '#030712';
+        lcdCtx.fillRect(0, 0, 256, 256);
+
+        // Circular gauge
+        lcdCtx.lineWidth = 14;
+        lcdCtx.strokeStyle = 'rgba(6, 182, 212, 0.2)';
+        lcdCtx.beginPath();
+        lcdCtx.arc(128, 128, 100, 0, Math.PI * 2);
+        lcdCtx.stroke();
+
+        // Progress arc
+        const progress = Math.min(1, Math.max(0, cpu / 100));
+        lcdCtx.strokeStyle = temp > 65 ? '#ef4444' : temp > 48 ? '#f59e0b' : '#06b6d4';
+        lcdCtx.beginPath();
+        lcdCtx.arc(128, 128, 100, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
+        lcdCtx.stroke();
+
+        // Temperature readout
+        lcdCtx.fillStyle = '#ffffff';
+        lcdCtx.font = 'bold 58px ui-monospace, sans-serif';
+        lcdCtx.textAlign = 'center';
+        lcdCtx.fillText(`${temp}°C`, 128, 125);
+
+        // Telemetry Sub-labels
+        lcdCtx.fillStyle = '#38bdf8';
+        lcdCtx.font = 'bold 22px sans-serif';
+        lcdCtx.fillText(`CPU ${cpu}%`, 128, 165);
+
+        lcdCtx.fillStyle = '#94a3b8';
+        lcdCtx.font = '16px monospace';
+        lcdCtx.fillText(`RAM ${ram}% • HEALTH ${W.telemetry.health_score || 98}`, 128, 195);
+
+        lcdTexture.needsUpdate = true;
+      }
+      updateLcdCanvas();
+
+      // 1. Dual-Chamber Showcase Chassis & Glass Panels
+      const chassisGroup = new THREE.Group();
+      const frameMat = W.materials.chassisDark;
+      const cornerPost1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.5, 0.08), frameMat);
+      cornerPost1.position.set(-1.1, 0, -1.0);
+      const cornerPost2 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.5, 0.08), frameMat);
+      cornerPost2.position.set(1.1, 0, -1.0);
+      const topPlate = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.08, 2.1), frameMat);
+      topPlate.position.set(0, 1.25, 0);
+      const btmPlate = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.12, 2.1), frameMat);
+      btmPlate.position.set(0, -1.25, 0);
+      chassisGroup.add(cornerPost1, cornerPost2, topPlate, btmPlate);
+
+      // Tempered Glass Front & Side Panels (lift outwards on explode)
+      const sideGlass = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.4, 1.95), W.materials.glass);
+      sideGlass.position.set(1.12, 0, 0);
+      const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(2.15, 2.4, 0.04), W.materials.glass);
+      frontGlass.position.set(0, 0, 1.02);
+      const glassGroup = new THREE.Group();
+      glassGroup.add(sideGlass, frontGlass);
+
+      W.add(glassGroup, {
+        name: 'Showcase Tempered Glass Panels',
+        label: 'Dual-Chamber Glass',
+        explode: [1.8, 0, 1.8],
+        description: 'Frameless 4mm tinted tempered glass panels providing panoramic view of interior hardware.',
+      });
+
+      W.add(chassisGroup, {
+        name: 'Aluminium Showcase Chassis',
+        label: 'O11-Style Frame',
+        explode: [0, -1.4, 0],
+        description: 'Dual-chamber dark anodized aluminium chassis with independent power supply compartment.',
+      });
+
+      // 2. ATX Motherboard & VRM Heatsinks
+      const moboGroup = new THREE.Group();
+      const moboPCB = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.9, 0.04), W.materials.pcbMatteBlack);
+      moboPCB.position.set(-0.15, 0.1, -0.6);
+      const vrmHeatsink1 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.65, 0.18), W.metal('black'));
+      vrmHeatsink1.position.set(-0.65, 0.5, -0.5);
+      const vrmHeatsink2 = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.22, 0.18), W.metal('black'));
+      vrmHeatsink2.position.set(-0.35, 0.85, -0.5);
+      const ioCover = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.1, 0.25), W.metal('black'));
+      ioCover.position.set(-0.85, 0.4, -0.5);
+      moboGroup.add(moboPCB, vrmHeatsink1, vrmHeatsink2, ioCover);
+      W.add(moboGroup, {
+        name: 'High-End ATX Motherboard',
+        label: 'Z790 / X870 PCB',
+        explode: [0, 0, -0.8],
+        description: '14-layer server-grade PCB with 24+1 power stages, reinforced PCIe 5.0 slot, and heavy heatsinks.',
+      });
+
+      // 3. CPU Liquid Cooler Pump Head with Live Dynamic LCD
+      const pumpGroup = new THREE.Group();
+      const pumpBody = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.22, 32), W.metal('black'));
+      pumpBody.rotation.x = Math.PI / 2;
+      pumpBody.position.set(-0.35, 0.45, -0.4);
+      const pumpScreenMat = new THREE.MeshBasicMaterial({ map: lcdTexture });
+      const pumpScreen = new THREE.Mesh(new THREE.CircleGeometry(0.32, 32), pumpScreenMat);
+      pumpScreen.position.set(-0.35, 0.45, -0.28);
+      // Dual braided liquid cooling tubes leading to top radiator
+      const tubeCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(-0.35, 0.55, -0.38),
+        new THREE.Vector3(-0.35, 0.95, -0.1),
+        new THREE.Vector3(-0.25, 1.1, 0.1),
+      ]);
+      const tubeGeo = new THREE.TubeGeometry(tubeCurve, 20, 0.045, 12, false);
+      const tubeMesh = new THREE.Mesh(tubeGeo, W.metal('black'));
+      pumpGroup.add(pumpBody, pumpScreen, tubeMesh);
+      W.add(pumpGroup, {
+        name: 'AIO Liquid Cooler Pump Head',
+        label: 'Live LCD Digital Readout',
+        explode: [0, 0, 1.8],
+        description: 'Copper micro-skived cold plate with integrated circular IPS display streaming real hardware metrics.',
+      });
+
+      // 4. Upright Triple-Fan Flagship GPU (RTX 5090 FE style)
+      const gpuGroup = new THREE.Group();
+      const gpuBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.58, 0.28), W.metal('titanium'));
+      gpuBody.position.set(0.05, -0.35, -0.1);
+      const gpuBackplate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.58, 0.03), W.metal('black'));
+      gpuBackplate.position.set(0.05, -0.35, -0.25);
+      gpuGroup.add(gpuBody, gpuBackplate);
+
+      // 3 GPU Spinning Axial Fans
+      const gpuFans = [];
+      for (let f = 0; f < 3; f++) {
+        const fanMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.04, 16), W.metal('black'));
+        fanMesh.rotation.x = Math.PI / 2;
+        fanMesh.position.set(-0.48 + f * 0.52, -0.35, 0.06);
+        gpuGroup.add(fanMesh);
+        gpuFans.push(fanMesh);
+      }
+      W.add(gpuGroup, {
+        name: 'Triple-Fan Flagship GPU',
+        label: 'RTX 5090 32GB FE',
+        explode: [0, -0.6, 2.2],
+        description: 'Vapor chamber cooled graphics accelerator with dual axial flow-through fans and illuminated logo.',
+      });
+
+      // 5. Dual Channel DDR5 RAM Sticks with Frosted RGB Bars
+      const ramGroup = new THREE.Group();
+      for (let r = 0; r < 2; r++) {
+        const stick = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.42, 0.85), W.metal('black'));
+        stick.position.set(0.18 + r * 0.12, 0.45, -0.5);
+        const rgbBar = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.06, 0.85), W.materials.argbLed);
+        rgbBar.position.set(0.18 + r * 0.12, 0.68, -0.5);
+        ramGroup.add(stick, rgbBar);
+      }
+      W.add(ramGroup, {
+        name: 'Dual-Channel DDR5 Memory',
+        label: '64GB 6400MHz RGB RAM',
+        explode: [0.8, 0.6, 0.8],
+        description: 'Low-latency gaming RAM modules with forged aluminium heatspreaders and addressable RGB LEDs.',
+      });
+
+      // 6. 360mm Roof Radiator & 3 Illuminated Exhaust Fans
+      const radGroup = new THREE.Group();
+      const radBody = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.14, 0.65), W.metal('black'));
+      radBody.position.set(0, 1.15, 0);
+      radGroup.add(radBody);
+
+      const radFans = [];
+      for (let rf = 0; rf < 3; rf++) {
+        const rFan = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 18), W.materials.argbLed);
+        rFan.position.set(-0.52 + rf * 0.52, 1.05, 0);
+        radGroup.add(rFan);
+        radFans.push(rFan);
+      }
+      W.add(radGroup, {
+        name: '360mm Liquid Cooling Radiator',
+        label: 'Triple-Fan Roof Exhaust',
+        explode: [0, 2.2, 0],
+        description: 'High-density micro-fin radiator dissipating CPU heat via triple hydraulic-bearing PWM fans.',
+      });
+
+      // 7. Side & Bottom Intake ARGB Fans (6 fans)
+      const intakeFansGroup = new THREE.Group();
+      const caseFans = [];
+      for (let bf = 0; bf < 3; bf++) {
+        const bFan = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 18), W.materials.argbLed);
+        bFan.position.set(-0.52 + bf * 0.52, -1.15, 0.2);
+        intakeFansGroup.add(bFan);
+        caseFans.push(bFan);
+      }
+      W.add(intakeFansGroup, {
+        name: 'High-Airflow Intake Fans',
+        label: 'Bottom & Side ARGB Arrays',
+        explode: [-1.8, 0, 1.2],
+        description: 'Intake fan array creating positive chassis air pressure and feeding cool ambient air to the GPU.',
+      });
+
+      // Continuous Telemetry Tick Animation
+      let lcdTickCount = 0;
+      W.onTick((delta) => {
+        // Spin fans proportionally to CPU load and telemetry fan_rpm
+        const speedMultiplier = ((W.telemetry.fan_rpm || 1000) / 1000) * 12;
+        const rotDelta = delta * speedMultiplier;
+
+        gpuFans.forEach((f) => (f.rotation.z += rotDelta));
+        radFans.forEach((f) => (f.rotation.y += rotDelta));
+        caseFans.forEach((f) => (f.rotation.y -= rotDelta));
+
+        // Update LCD canvas every ~15 frames for buttery efficiency
+        lcdTickCount++;
+        if (lcdTickCount % 12 === 0) {
+          updateLcdCanvas();
+        }
+      });
+    }
+
+    // ========================================================
+    // 6. SMART VERTEX-ANCHORED TEARDOWN LABELS
+    // ========================================================
+    function updateTeardownLabels() {
+      if (W.explodeProgress < 0.42) {
+        labelsContainer.innerHTML = '';
+        svgEl.innerHTML = '';
+        return;
+      }
+
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const opacity = Math.min(1, (W.explodeProgress - 0.42) / 0.35);
+
+      // Partition parts into left and right screen columns
+      const leftParts = [];
+      const rightParts = [];
+
+      for (const p of W.parts) {
+        // Project anchor to 2D screen space
+        p.group.localToWorld(p.anchorWorld.copy(p.anchorLocal));
+        const proj = p.anchorWorld.clone().project(camera);
+
+        const screenX = ((proj.x + 1) / 2) * width;
+        const screenY = ((-proj.y + 1) / 2) * height;
+
+        // Skip parts behind camera
+        if (proj.z > 1.0) continue;
+
+        const item = { part: p, screenX, screenY, projZ: proj.z };
+        if (screenX < width * 0.5) {
+          leftParts.push(item);
+        } else {
+          rightParts.push(item);
+        }
+      }
+
+      // Sort by screenY to prevent crossing leader lines
+      leftParts.sort((a, b) => a.screenY - b.screenY);
+      rightParts.sort((a, b) => a.screenY - b.screenY);
+
+      let svgHTML = '';
+      let domHTML = '';
+
+      // Distribute along left column
+      const leftGutterX = Math.max(20, width * 0.05);
+      const rightGutterX = Math.min(width - 260, width * 0.95 - 240);
+      const verticalGap = Math.min(75, (height - 120) / Math.max(leftParts.length, rightParts.length, 1));
+
+      function layoutColumn(items, isLeft) {
+        items.forEach((item, idx) => {
+          const cardX = isLeft ? leftGutterX : rightGutterX;
+          const cardY = 60 + idx * verticalGap;
+          const anchorPointX = item.screenX;
+          const anchorPointY = item.screenY;
+          const attachPointX = isLeft ? cardX + 240 : cardX;
+          const attachPointY = cardY + 24;
+
+          // Crisp SVG leader line
+          svgHTML += `
+            <circle cx="${anchorPointX}" cy="${anchorPointY}" r="4" fill="#06b6d4" stroke="#ffffff" stroke-width="1.5" opacity="${opacity}" />
+            <polyline points="${anchorPointX},${anchorPointY} ${attachPointX},${attachPointY}" 
+                      fill="none" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="3,3" opacity="${opacity * 0.85}" />
+          `;
+
+          // HTML Card
+          domHTML += `
+            <div class="teardown-label visible" 
+                 style="left: ${cardX}px; top: ${cardY}px; opacity: ${opacity};"
+                 onclick="window.parent.postMessage({ type: 'PART_CLICKED', partName: '${item.part.name}', description: '${item.part.description.replace(/'/g, "\\'")}' }, '*')"
+                 onmouseenter="window.parent.postMessage({ type: 'PART_HOVERED', partName: '${item.part.name}', description: '${item.part.description.replace(/'/g, "\\'")}' }, '*')">
+              <div class="title">
+                <span>${item.part.name}</span>
+                <span style="color:#06b6d4;">✦</span>
+              </div>
+              <div class="sub">${item.part.label}</div>
+              <div class="desc">${item.part.description}</div>
+            </div>
+          `;
+        });
+      }
+
+      layoutColumn(leftParts, true);
+      layoutColumn(rightParts, false);
+
+      svgEl.innerHTML = svgHTML;
+      labelsContainer.innerHTML = domHTML;
+    }
+
+    // ========================================================
+    // 7. RENDER LOOP WITH NaN / HDR GUARD PASS
+    // ========================================================
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = Math.min(clock.getDelta(), 0.1);
+
+      // NaN / HDR Guard Pass
+      if (isNaN(camera.position.x) || isNaN(camera.position.y) || isNaN(camera.position.z)) {
+        camera.position.set(0, 2.5, 6.5);
+      }
+      if (isNaN(controls.target.x)) {
+        controls.target.set(0, 0, 0);
+      }
+
+      controls.update();
+
+      // Run registered ticks
+      for (const cb of W.tickCallbacks) {
+        try {
+          cb(delta);
+        } catch (e) {
+          console.warn('Tick error:', e);
+        }
+      }
+
+      renderer.render(scene, camera);
+
+      // Update vertex-anchored leader lines
+      updateTeardownLabels();
+    }
+    animate();
+
+    // ========================================================
+    // 8. WINDOW RESIZE HANDLING
+    // ========================================================
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ========================================================
+    // 9. POSTMESSAGE COMMUNICATION FROM REACT PARENT
+    // ========================================================
+    window.addEventListener('message', (event) => {
+      const data = event.data;
+      if (!data || !data.type) return;
+
+      switch (data.type) {
+        case 'LOAD_SHOWPIECE':
+          if (data.showpiece === 'gaming_pc') {
+            buildGamingPCDigitalTwin();
+          } else {
+            buildTurbofanJetEngine();
+          }
+          break;
+
+        case 'SET_EXPLODE':
+          W.setExplode(data.value);
+          break;
+
+        case 'TOGGLE_EXPLODE':
+          const target = W.explodeProgress > 0.5 ? 0 : 1;
+          const startVal = W.explodeProgress;
+          const startTime = performance.now();
+          const duration = 750;
+          function step(now) {
+            const t = Math.min(1, (now - startTime) / duration);
+            const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+            W.setExplode(startVal + (target - startVal) * ease);
+            if (t < 1) requestAnimationFrame(step);
+          }
+          requestAnimationFrame(step);
+          break;
+
+        case 'SET_THERMAL':
+          W.setThermalMode(Boolean(data.enabled));
+          break;
+
+        case 'TELEMETRY_UPDATE':
+          W.updateTelemetry(data.telemetry || {});
+          break;
+
+        case 'TRIGGER_EXPORT_STL':
+          W.exportSTL();
+          break;
+
+        case 'RESET_CAMERA':
+          camera.position.set(0, 2.5, 6.5);
+          controls.target.set(0, 0, 0);
+          controls.update();
+          break;
+
+        default:
+          break;
+      }
+    });
+
+    // Load initial default showpiece: Turbofan Jet Engine
+    buildTurbofanJetEngine();
+
+    // Inform parent that stage is loaded and ready
+    window.parent.postMessage({ type: 'STAGE_READY' }, '*');
+  </script>
+</body>
+</html>

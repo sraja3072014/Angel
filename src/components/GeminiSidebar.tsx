@@ -10,6 +10,7 @@ import {
   MessageSquare,
   ChevronLeft,
   CheckCircle2,
+  Boxes,
 } from "lucide-react";
 
 export interface ChatSession {
@@ -25,6 +26,7 @@ interface GeminiSidebarProps {
   onNewChat: () => void;
   onOpenMenu?: () => void;
   onSelectPrompt?: (prompt: string) => void;
+  onOpenWorkshop?: () => void;
   currentChatId?: string | null;
   sessions?: ChatSession[];
   onSelectSession?: (session: ChatSession) => void;
@@ -36,6 +38,7 @@ export function GeminiSidebar({
   onNewChat,
   onOpenMenu,
   onSelectPrompt,
+  onOpenWorkshop,
   currentChatId,
   sessions,
   onSelectSession,
@@ -120,6 +123,20 @@ export function GeminiSidebar({
           >
             <Search size={16} className="text-slate-400 shrink-0" />
             {!collapsed && <span>Search chat</span>}
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveItem("workshop");
+              onOpenWorkshop?.();
+            }}
+            title="3D Workshop Studio"
+            className={`flex items-center gap-3 rounded-xl hover:bg-white/10 text-xs font-medium text-slate-300 hover:text-white transition ${
+              collapsed ? "p-2.5 justify-center" : "px-3 py-2"
+            } ${activeItem === "workshop" ? "bg-white/10 text-white" : ""}`}
+          >
+            <Boxes size={16} className="text-cyan-400 shrink-0" />
+            {!collapsed && <span>3D Workshop</span>}
           </button>
 
           <button

@@ -210,6 +210,11 @@ fn execute_os_reflex(command: String) -> String {
         return "🧹 தற்காலிக கோப்புகள் அழிக்கப்பட்டன.".to_string();
     }
 
+    // Reflex: 3D Workshop Triggers
+    if cmd_lower.contains("open 3d workshop") || cmd_lower.contains("open workshop") || cmd_lower.contains("3d பட்டறை") {
+        return "3D_WORKSHOP_TRIGGER".to_string();
+    }
+
     // Check dynamic hot-loaded skills in Plugin Forge
     if let Some(plugin_res) = plugin_forge::plugin_forge_match_and_run(command) {
         return plugin_res;
@@ -466,6 +471,45 @@ async fn proxy_local_llm_request(
     .map_err(|e| format!("Task execution error: {e}"))?
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StlFilePayload {
+    pub filename: String,
+    pub content: String,
+}
+
+#[tauri::command]
+fn export_workshop_stl_files(
+    project_name: String,
+    files: Vec<StlFilePayload>,
+) -> Result<String, String> {
+    let clean_name = project_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect::<String>();
+
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Public".to_string());
+    let export_dir = std::path::PathBuf::from(user_profile)
+        .join("Downloads")
+        .join("Angel_3D_Builds")
+        .join(&clean_name);
+
+    std::fs::create_dir_all(&export_dir)
+        .map_err(|e| format!("Failed to create export directory: {}", e))?;
+
+    for file in files {
+        let clean_filename = file
+            .filename
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' })
+            .collect::<String>();
+        let target_path = export_dir.join(&clean_filename);
+        std::fs::write(&target_path, file.content.as_bytes())
+            .map_err(|e| format!("Failed to write STL file {}: {}", clean_filename, e))?;
+    }
+
+    Ok(export_dir.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -611,7 +655,9 @@ pub fn run() {
             plugin_forge::forge_new_skill,
             plugin_forge::plugin_forge_execute,
             plugin_forge::plugin_forge_delete,
-            plugin_forge::plugin_forge_match_and_run
+            plugin_forge::plugin_forge_match_and_run,
+            export_workshop_stl_files,
+            os_doctor::get_system_health_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running Project Angel");

@@ -31,6 +31,7 @@ import {
   MessageCircleDashed,
   MessageSquare,
   Cpu,
+  Boxes,
 } from "lucide-react";
 import "./App.css";
 import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
@@ -39,6 +40,7 @@ import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
 import { HoloEarthStage } from "./components/HoloEarthStage";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
+import { WorkshopStagePanel } from "./components/WorkshopStagePanel";
 
 interface ChatMessage {
   id: string;
@@ -70,8 +72,8 @@ export default function App() {
   const [showGetAppModal, setShowGetAppModal] = useState(false);
   const [temporaryChat, setTemporaryChat] = useState(false);
 
-  // Workspace Mode: "chat" vs "task"
-  const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task">("chat");
+  // Workspace Mode: "chat" vs "task" vs "workshop"
+  const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task" | "workshop">("chat");
 
   // Ambient Earth Opacity (defaults to 50%)
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
@@ -289,10 +291,74 @@ export default function App() {
     setMessages([...updatedUserMsgs, initialAssistantMsg]);
 
     try {
+      const promptLower = prompt.toLowerCase();
+
+      // Instant 3D Workshop Voice & Chat Triggers
+      if (
+        promptLower.includes("open 3d workshop") ||
+        promptLower.includes("open workshop") ||
+        promptLower.includes("start 3d workshop") ||
+        promptLower.includes("3d workshop") ||
+        promptLower.includes("3d பட்டறை")
+      ) {
+        setWorkspaceMode("workshop");
+        const replyText = "Opening 3D Workshop Studio Stage. Two showpieces ready: Turbofan Jet Engine and Live Gaming PC Hardware Twin.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "3D Workshop Launched", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("pull it apart") || promptLower.includes("explode model") || promptLower.includes("பிரித்துப் பார்")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "TOGGLE_EXPLODE" }, "*");
+        const replyText = "Disassembling 3D assembly into component layers.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "3D Teardown Explode", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("put back together") || promptLower.includes("assemble model") || promptLower.includes("மீண்டும் இணை")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_EXPLODE", value: 0 }, "*");
+        const replyText = "Reassembling components into unified state.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "3D Reassembled", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("3d print it") || promptLower.includes("export stl") || promptLower.includes("print 3d")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "TRIGGER_EXPORT_STL" }, "*");
+        const replyText = "Generating 3D printable STL files for all assembly components.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "STL Print Export", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
       // 1. Check local Rust OS reflex if in Task mode or standard prompt
       if (workspaceMode === "task") {
         try {
-          const localRes = await invoke<string>("execute_os_reflex", { command: prompt });
+          let localRes = await invoke<string>("execute_os_reflex", { command: prompt });
+          if (localRes === "3D_WORKSHOP_TRIGGER") {
+            setWorkspaceMode("workshop");
+            localRes = "Opening 3D Workshop Studio Stage. Two showpieces ready: Turbofan Jet Engine and Live Gaming PC Hardware Twin.";
+          }
           if (localRes !== "CLOUD_BRAIN") {
             incrementUsageTelemetry("reflex");
             const reflexMsgs = [
@@ -490,6 +556,7 @@ export default function App() {
         onNewChat={handleNewChat}
         onOpenMenu={() => setActiveModal({ type: "menu", tab: "general" })}
         onSelectPrompt={(p) => handleSendMessage(p)}
+        onOpenWorkshop={() => setWorkspaceMode("workshop")}
         sessions={sessions}
         currentChatId={currentSessionId}
         onSelectSession={handleSelectSession}
@@ -608,75 +675,86 @@ export default function App() {
         )}
 
         {/* CENTER WORKSPACE BODY */}
-        <main className="flex-1 overflow-y-auto px-4 py-6 flex flex-col justify-between">
-          {/* CASE A: No messages yet -> Clean Hero Greeting */}
-          {messages.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-center max-w-2xl mx-auto my-auto">
-              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-md">
-                Where should we start?
-              </h1>
+        <main className={`flex-1 overflow-hidden flex flex-col ${workspaceMode === "workshop" ? "p-3 sm:p-5" : "overflow-y-auto px-4 py-6 justify-between"}`}>
+          {workspaceMode === "workshop" ? (
+            <div className="w-full h-full flex flex-col min-h-0 animate-in fade-in zoom-in-95 duration-200">
+              <WorkshopStagePanel
+                onClose={() => setWorkspaceMode("chat")}
+                onVoiceSpeak={(t) => voiceRef.current?.speak(t, () => setSpeaking(true), () => setSpeaking(false))}
+              />
             </div>
           ) : (
-            /* CASE B: Conversation Stream */
-            <div className="flex-1 max-w-3xl w-full mx-auto space-y-4 pb-6 overflow-y-auto">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${
-                    msg.role === "user" ? "items-end" : "items-start"
-                  } space-y-1`}
-                >
-                  <div
-                    className={`p-4 rounded-3xl text-xs sm:text-sm leading-relaxed max-w-[85%] select-text backdrop-blur-xl ${
-                      msg.role === "user"
-                        ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-50 shadow-md"
-                        : "bg-slate-900/70 border border-white/15 text-slate-100 shadow-lg"
-                    }`}
-                  >
-                    {msg.role === "assistant" && (
-                      <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-white/10">
-                        <span className="text-cyan-400 font-extrabold text-xs">✦ Angel AI</span>
-                        {msg.actionExecuted && (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-[10px] font-bold text-emerald-300">
-                            {msg.actionExecuted}
-                          </span>
+            <>
+              {/* CASE A: No messages yet -> Clean Hero Greeting */}
+              {messages.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center max-w-2xl mx-auto my-auto">
+                  <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-md">
+                    Where should we start?
+                  </h1>
+                </div>
+              ) : (
+                /* CASE B: Conversation Stream */
+                <div className="flex-1 max-w-3xl w-full mx-auto space-y-4 pb-6 overflow-y-auto">
+                  {messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${
+                        msg.role === "user" ? "items-end" : "items-start"
+                      } space-y-1`}
+                    >
+                      <div
+                        className={`p-4 rounded-3xl text-xs sm:text-sm leading-relaxed max-w-[85%] select-text backdrop-blur-xl ${
+                          msg.role === "user"
+                            ? "bg-cyan-600/30 border border-cyan-400/40 text-cyan-50 shadow-md"
+                            : "bg-slate-900/70 border border-white/15 text-slate-100 shadow-lg"
+                        }`}
+                      >
+                        {msg.role === "assistant" && (
+                          <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-white/10">
+                            <span className="text-cyan-400 font-extrabold text-xs">✦ Angel AI</span>
+                            {msg.actionExecuted && (
+                              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-[10px] font-bold text-emerald-300">
+                                {msg.actionExecuted}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        <p className="whitespace-pre-wrap">{msg.text || (isProcessing ? "Thinking..." : "")}</p>
+
+                        {/* Assistant Message Actions */}
+                        {msg.role === "assistant" && msg.text && (
+                          <div className="flex items-center gap-2 mt-2 pt-1 border-t border-white/10 text-slate-400 text-xs">
+                            <button
+                              onClick={() =>
+                                voiceRef.current?.speak(
+                                  msg.text,
+                                  () => setSpeaking(true),
+                                  () => setSpeaking(false)
+                                )
+                              }
+                              title="Speak reply"
+                              className="p-1 rounded hover:text-cyan-300 transition"
+                            >
+                              <Volume2 size={13} />
+                            </button>
+                            <button
+                              onClick={() => handleCopyText(msg.id, msg.text)}
+                              title="Copy text"
+                              className="p-1 rounded hover:text-cyan-300 transition"
+                            >
+                              {copiedId === msg.id ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
+                            </button>
+                          </div>
                         )}
                       </div>
-                    )}
-
-                    <p className="whitespace-pre-wrap">{msg.text || (isProcessing ? "Thinking..." : "")}</p>
-
-                    {/* Assistant Message Actions */}
-                    {msg.role === "assistant" && msg.text && (
-                      <div className="flex items-center gap-2 mt-2 pt-1 border-t border-white/10 text-slate-400 text-xs">
-                        <button
-                          onClick={() =>
-                            voiceRef.current?.speak(
-                              msg.text,
-                              () => setSpeaking(true),
-                              () => setSpeaking(false)
-                            )
-                          }
-                          title="Speak reply"
-                          className="p-1 rounded hover:text-cyan-300 transition"
-                        >
-                          <Volume2 size={13} />
-                        </button>
-                        <button
-                          onClick={() => handleCopyText(msg.id, msg.text)}
-                          title="Copy text"
-                          className="p-1 rounded hover:text-cyan-300 transition"
-                        >
-                          {copiedId === msg.id ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-slate-500 font-mono px-2">{msg.timestamp}</span>
+                      <span className="text-[10px] text-slate-500 font-mono px-2">{msg.timestamp}</span>
+                    </div>
+                  ))}
+                  <div ref={messagesEndRef} />
                 </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
+              )}
+            </>
           )}
 
           {/* 4. STREAMLINED TRANSLUCENT PROMPT COMPOSER */}
@@ -738,6 +816,7 @@ export default function App() {
                         {showMoreUploads && (
                           <div className="absolute left-full bottom-0 ml-1.5 w-44 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs">
                             {[
+                              { label: "3D Workshop", icon: Boxes },
                               { label: "Google Photos", icon: Image },
                               { label: "Avatar", icon: User },
                               { label: "Notebook", icon: BookOpen },
@@ -752,7 +831,11 @@ export default function App() {
                                 <button
                                   key={idx}
                                   onClick={() => {
-                                    handleSendMessage(`Open ${item.label} workspace.`);
+                                    if (item.label === "3D Workshop") {
+                                      setWorkspaceMode("workshop");
+                                    } else {
+                                      handleSendMessage(`Open ${item.label} workspace.`);
+                                    }
                                     setShowPlusMenu(false);
                                     setShowMoreUploads(false);
                                   }}
@@ -915,7 +998,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* EXTERNAL CHAT & TASK DYNAMIC MODE PILLS */}
+              {/* EXTERNAL CHAT, TASK & 3D WORKSHOP DYNAMIC MODE PILLS */}
               <div className="flex items-center justify-center gap-2 pt-0.5">
                 <button
                   onClick={() => setWorkspaceMode("chat")}
@@ -940,6 +1023,20 @@ export default function App() {
                   <span>Task</span>
                   {workspaceMode === "task" && (
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                  )}
+                </button>
+                <button
+                  onClick={() => setWorkspaceMode("workshop")}
+                  className={`px-3.5 py-1 rounded-full text-xs font-bold transition flex items-center gap-1.5 ${
+                    workspaceMode === "workshop"
+                      ? "bg-cyan-500/25 border border-cyan-400/60 text-cyan-200 shadow-[0_0_15px_rgba(6,182,212,0.35)]"
+                      : "bg-white/5 border border-white/10 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  <Boxes size={13} className="text-cyan-400" />
+                  <span>3D Workshop</span>
+                  {workspaceMode === "workshop" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
                   )}
                 </button>
               </div>
