@@ -261,9 +261,9 @@ export function MenuControlCenterWindow({
   });
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     const saved = localStorage.getItem("angel_primary_model");
-    if (saved && (saved.includes("3.8") || saved === "gemini-3.8-flash")) {
-      localStorage.setItem("angel_primary_model", "gemini-2.5-flash");
-      return "gemini-2.5-flash";
+    if (saved && (saved.includes("3.8") || saved === "gemini-3.8-flash" || saved === "gemini-2.5-flash")) {
+      localStorage.setItem("angel_primary_model", "gemini-2.5-pro");
+      return "gemini-2.5-pro";
     }
     return saved || "Auto";
   });

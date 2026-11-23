@@ -82,11 +82,11 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     category: "cloud",
     apiKey: "",
     endpoint: "https://generativelanguage.googleapis.com",
-    defaultModel: "gemini-2.5-flash",
-    availableModels: ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"],
+    defaultModel: "gemini-2.5-pro",
+    availableModels: ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
     enabled: true,
     status: "missing_key",
-    description: "Gemini 2.5 Flash & 2.0. Native multimodal vision & ultra-fast reasoning.",
+    description: "Gemini 2.5 Pro & 2.0. Native multimodal vision & ultra-fast reasoning.",
     consoleUrl: "https://aistudio.google.com/app/apikey",
     capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "👁 VISION", "</> CODE GEN"],
   },
@@ -351,12 +351,12 @@ export function loadAIProviders(): AIProviderConfig[] {
             ? existing.availableModels
             : def.availableModels;
 
-        // Auto-migrate stale Gemini models to gemini-2.5-flash
+        // Auto-migrate stale Gemini models to gemini-2.5-pro
         if (def.id === "gemini") {
-          if (!defModel || defModel.includes("3.8") || defModel.includes("3.5")) {
-            defModel = "gemini-2.5-flash";
+          if (!defModel || defModel.includes("3.8") || defModel.includes("3.5") || defModel === "gemini-2.5-flash") {
+            defModel = "gemini-2.5-pro";
           }
-          availModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-1.5-pro"];
+          availModels = ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
         }
 
         // Auto-migrate Free LLM API to FreeLLMAPI Unified Router default gateway endpoint (127.0.0.1:31415)
@@ -403,9 +403,9 @@ export function loadAIProviders(): AIProviderConfig[] {
       const currentPrimary = localStorage.getItem("angel_primary_model");
       if (
         currentPrimary &&
-        (currentPrimary.includes("3.8") || currentPrimary.includes("3.5"))
+        (currentPrimary.includes("3.8") || currentPrimary.includes("3.5") || currentPrimary === "gemini-2.5-flash")
       ) {
-        localStorage.setItem("angel_primary_model", "gemini-2.5-flash");
+        localStorage.setItem("angel_primary_model", "gemini-2.5-pro");
       }
     } catch {}
 
@@ -580,21 +580,22 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
     if (provider.id === "gemini") {
       if (!activeKey) return { ok: false, message: "Gemini API key is required" };
       const trimmedKey = activeKey.trim();
-      const rawTarget = (provider.defaultModel || "gemini-3.8-flash").replace(/^(models\/)+/, "").trim();
+      const rawTarget = (provider.defaultModel || "gemini-2.5-pro").replace(/^(models\/)+/, "").trim();
       const targetModel =
-        rawTarget.includes("2.5") || rawTarget.includes("3.5") || rawTarget.includes("2.0") || rawTarget.includes("1.5")
-          ? "gemini-3.8-flash"
+        rawTarget.includes("3.8") || rawTarget === "gemini-2.5-flash"
+          ? "gemini-2.5-pro"
           : rawTarget;
 
       const modelsToTry = [targetModel];
-      if (targetModel !== "gemini-3.8-flash-lite") {
-        modelsToTry.push("gemini-3.8-flash-lite");
-      }
+      if (!modelsToTry.includes("gemini-2.5-pro")) modelsToTry.push("gemini-2.5-pro");
+      if (!modelsToTry.includes("gemini-2.0-flash")) modelsToTry.push("gemini-2.0-flash");
+      if (!modelsToTry.includes("gemini-1.5-pro")) modelsToTry.push("gemini-1.5-pro");
+      if (!modelsToTry.includes("gemini-1.5-flash")) modelsToTry.push("gemini-1.5-flash");
 
       let lastErrMessage = "";
       for (const modelName of modelsToTry) {
         try {
-          const res = await fetch(
+          const res = await fetchWithTimeout(
             `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(trimmedKey)}`,
             {
               method: "POST",
@@ -602,7 +603,8 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
               body: JSON.stringify({
                 contents: [{ parts: [{ text: "ping" }] }],
               }),
-            }
+            },
+            8000
           );
           const latencyMs = Math.round(performance.now() - startTime);
           if (res.ok) {
@@ -621,10 +623,14 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         } catch {
           try {
             const ai = new GoogleGenAI({ apiKey: trimmedKey });
-            await ai.models.generateContent({
+            const pingPromise = ai.models.generateContent({
               model: modelName,
               contents: "Respond with 'ok'",
             });
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error("Timeout")), 8000)
+            );
+            await Promise.race([pingPromise, timeoutPromise]);
             const latencyMs = Math.round(performance.now() - startTime);
             return {
               ok: true,
@@ -640,26 +646,66 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       return { ok: false, message: lastErrMessage || "Gemini connection failed" };
     }
 
+    if (provider.id === "groq") {
+      if (!activeKey || !activeKey.trim()) {
+        return { ok: false, message: "Groq API key is required (gsk_...)" };
+      }
+      const trimmedKey = activeKey.trim();
+      const modelToTest = provider.defaultModel || "llama-3.3-70b-versatile";
+      try {
+        const res = await fetchWithTimeout("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${trimmedKey}`,
+          },
+          body: JSON.stringify({
+            model: modelToTest,
+            messages: [{ role: "user", content: "Reply with OK" }],
+            max_tokens: 10,
+          }),
+        }, 8000);
+
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            ok: true,
+            message: `Connected • ${latencyMs}ms (${modelToTest})`,
+            latencyMs,
+          };
+        }
+        const err = await res.json().catch(() => ({}));
+        const errMsg = err?.error?.message || `HTTP ${res.status}: ${res.statusText || "Request failed"}`;
+        return { ok: false, message: `Groq error: ${errMsg}` };
+      } catch (err: any) {
+        return { ok: false, message: `Groq connection failed: ${err?.message || err}` };
+      }
+    }
+
     if (provider.id === "anthropic") {
       if (!activeKey) return { ok: false, message: "Anthropic API key required" };
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": activeKey,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-          "dangerously-allow-browser": "true",
-        },
-        body: JSON.stringify({
-          model: provider.defaultModel || "claude-3-5-haiku-latest",
-          max_tokens: 5,
-          messages: [{ role: "user", content: "ping" }],
-        }),
-      });
-      const latencyMs = Math.round(performance.now() - startTime);
-      if (res.ok) return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
-      const err = await res.json().catch(() => ({}));
-      return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
+      try {
+        const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": activeKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "dangerously-allow-browser": "true",
+          },
+          body: JSON.stringify({
+            model: provider.defaultModel || "claude-3-5-haiku-latest",
+            max_tokens: 5,
+            messages: [{ role: "user", content: "ping" }],
+          }),
+        }, 8000);
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
+        const err = await res.json().catch(() => ({}));
+        return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
+      } catch (err: any) {
+        return { ok: false, message: `Anthropic error: ${err?.message || err}` };
+      }
     }
 
     if (provider.id === "openrouter") {
@@ -738,7 +784,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       headers["X-Title"] = "Angel AI";
     }
 
-    const res = await fetch(targetUrl, {
+    const res = await fetchWithTimeout(targetUrl, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -746,7 +792,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 5,
       }),
-    });
+    }, 8000);
 
     const latencyMs = Math.round(performance.now() - startTime);
     if (res.ok) {
@@ -1255,7 +1301,7 @@ Return ONLY valid JSON with exact keys:
 Never use destructive commands (rm, del, format).`;
 
       const res = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
+        model: "gemini-2.5-pro",
         contents: forgePrompt,
       });
       const cleanJson = (res.text || "").replace(/```json|```/g, "").trim();
@@ -1378,14 +1424,13 @@ Never use destructive commands (rm, del, format).`;
     }
 
     const cleanModelName = (m: string) => m.replace(/^(models\/)+/, "").trim();
-    const ladder = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
+    const ladder = ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
     if (provider.defaultModel) {
       const customModel = cleanModelName(provider.defaultModel);
       if (
-        !customModel.includes("2.5") &&
-        !customModel.includes("3.5") &&
-        !customModel.includes("2.0") &&
-        !customModel.includes("1.5")
+        customModel &&
+        !customModel.includes("3.8") &&
+        customModel !== "gemini-2.5-flash"
       ) {
         if (!ladder.includes(customModel)) {
           ladder.unshift(customModel);
@@ -1406,11 +1451,17 @@ Never use destructive commands (rm, del, format).`;
           let accumulated = "";
           let firstSentenceSpoken = false;
 
-          const responseStream = await ai.models.generateContentStream({
+          // Wrap stream generation in timeout to prevent hanging connections
+          const streamPromise = ai.models.generateContentStream({
             model: cleanModelName(model),
             contents: contentParts,
             config: { systemInstruction },
           });
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout waiting for Gemini stream (${model})`)), 10000)
+          );
+
+          const responseStream = await Promise.race([streamPromise, timeoutPromise]);
 
           for await (const chunk of responseStream) {
             const chunkText = chunk.text || "";

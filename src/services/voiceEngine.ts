@@ -527,7 +527,7 @@ export class AngelVoiceEngine {
         const base64Audio = await this.blobToBase64(blob);
         const ai = new GoogleGenAI({ apiKey: cfg.geminiKey });
         const cleanModelName = (m: string) => m.replace(/^(models\/)+/, "").trim();
-        const ladder = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
+        const ladder = ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
 
         for (const model of ladder) {
           try {

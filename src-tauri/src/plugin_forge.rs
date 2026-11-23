@@ -101,30 +101,76 @@ pub fn execute_single_skill(skill: &AngelSkill) -> Result<String, String> {
         }
         "powershell" => {
             let output = Command::new("powershell")
-                .args(["-ExecutionPolicy", "Bypass", "-Command", &skill.payload])
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &skill.payload])
                 .creation_flags(CREATE_NO_WINDOW)
                 .output()
                 .map_err(|e| format!("PowerShell execution error: {}", e))?;
 
-            let res_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Ok(if res_text.is_empty() {
-                format!("⚡ Skill '{}' completed cleanly.", skill.name)
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if !stdout.is_empty() {
+                Ok(stdout)
+            } else if !stderr.is_empty() {
+                Ok(format!("⚠️ {}", stderr))
             } else {
-                res_text
-            })
+                Ok(format!("⚡ Skill '{}' completed cleanly.", skill.name))
+            }
         }
         "http_rest" | "webhook" => {
+            let payload_trimmed = skill.payload.trim();
             let mut cmd = Command::new("curl.exe");
             cmd.creation_flags(CREATE_NO_WINDOW);
-            cmd.args(["-s", "-S", "-m", "10", "--connect-timeout", "5"]);
-            cmd.arg(&skill.payload);
-            let output = cmd.output().map_err(|e| format!("HTTP request error: {}", e))?;
-            let res_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Ok(if res_text.is_empty() {
-                format!("⚡ HTTP Skill '{}' executed successfully.", skill.name)
+            cmd.args(["-s", "-S", "-m", "15", "--connect-timeout", "6"]);
+
+            let mut target_label = String::new();
+
+            if payload_trimmed.starts_with('{') {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload_trimmed) {
+                    let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("GET");
+                    let url = v.get("url").or_else(|| v.get("endpoint")).and_then(|u| u.as_str()).unwrap_or("");
+                    target_label = format!("{} {}", method, url);
+
+                    cmd.arg("-X").arg(method);
+                    if let Some(headers) = v.get("headers").and_then(|h| h.as_object()) {
+                        for (k, val) in headers {
+                            if let Some(val_str) = val.as_str() {
+                                cmd.arg("-H").arg(format!("{}: {}", k, val_str));
+                            }
+                        }
+                    }
+                    if let Some(body) = v.get("body").or_else(|| v.get("body_template")).and_then(|b| b.as_str()) {
+                        if !body.is_empty() && (method == "POST" || method == "PUT" || method == "PATCH") {
+                            cmd.arg("-d").arg(body);
+                        }
+                    }
+                    cmd.arg(url);
+                } else {
+                    cmd.arg(payload_trimmed);
+                }
+            } else if payload_trimmed.starts_with("curl ") {
+                let stripped = payload_trimmed.trim_start_matches("curl ").trim();
+                cmd.args(stripped.split_whitespace());
             } else {
-                res_text
-            })
+                target_label = payload_trimmed.to_string();
+                cmd.arg(payload_trimmed);
+            }
+
+            let output = cmd.output().map_err(|e| format!("HTTP request error: {}", e))?;
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+            if !stdout.is_empty() {
+                if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    if let Ok(pretty) = serde_json::to_string_pretty(&parsed_json) {
+                        return Ok(pretty);
+                    }
+                }
+                Ok(stdout)
+            } else if !stderr.is_empty() {
+                Ok(format!("⚠️ HTTP error: {}", stderr))
+            } else {
+                Ok(format!("⚡ HTTP Skill '{}' executed successfully (Target: {}).", skill.name, target_label))
+            }
         }
         "prompt_tool" => {
             Ok(format!("💡 Cognitive Skill '{}' ready for AI context: {}", skill.name, skill.payload))
@@ -599,11 +645,27 @@ pub fn plugin_forge_save(skill: AngelSkill) -> Result<String, String> {
 #[tauri::command]
 pub fn plugin_forge_execute(skill_id: String) -> Result<String, String> {
     let skills = load_all_skills();
-    if let Some(skill) = skills.iter().find(|s| s.id == skill_id) {
+    let skill_id_lower = skill_id.to_lowercase();
+    if let Some(skill) = skills.iter().find(|s| {
+        s.id == skill_id
+            || s.name.eq_ignore_ascii_case(&skill_id)
+            || s.id.to_lowercase() == skill_id_lower
+            || s.trigger.eq_ignore_ascii_case(&skill_id)
+    }) {
         execute_single_skill(skill)
     } else {
-        Err("Skill ID not found".to_string())
+        Err(format!("Skill '{}' not found in installed skills catalog.", skill_id))
     }
+}
+
+#[tauri::command]
+pub fn run_forged_skill(skill_id: String) -> Result<String, String> {
+    plugin_forge_execute(skill_id)
+}
+
+#[tauri::command]
+pub fn list_forged_skills() -> Vec<AngelSkill> {
+    load_all_skills()
 }
 
 #[tauri::command]

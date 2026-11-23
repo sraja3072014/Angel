@@ -118,9 +118,9 @@ export default function App() {
   // AI Model Ladder Selector
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     const saved = localStorage.getItem("angel_primary_model");
-    if (saved && (saved.includes("3.8") || saved === "gemini-3.8-flash")) {
-      localStorage.setItem("angel_primary_model", "gemini-2.5-flash");
-      return "gemini-2.5-flash";
+    if (saved && (saved.includes("3.8") || saved === "gemini-3.8-flash" || saved === "gemini-2.5-flash")) {
+      localStorage.setItem("angel_primary_model", "gemini-2.5-pro");
+      return "gemini-2.5-pro";
     }
     return saved || "Auto";
   });
@@ -581,6 +581,55 @@ export default function App() {
             return;
           }
         } catch {}
+      }
+
+      // 1.5 Check installed SkillForge plugins before general LLM query
+      try {
+        const skills = ((await invoke<any[]>("list_forged_skills").catch(() => invoke<any[]>("plugin_forge_list"))) || []) as any[];
+        const promptLower = prompt.toLowerCase().trim();
+        const matchedSkill = skills?.find((s: any) => {
+          if (!s.enabled) return false;
+          const trigger = (s.trigger || "").toLowerCase().trim();
+          if (trigger && (promptLower === trigger || promptLower.includes(trigger))) return true;
+          if (Array.isArray(s.trigger_phrases)) {
+            return s.trigger_phrases.some((tp: string) => {
+              const tpLower = tp.toLowerCase().trim();
+              return tpLower && (promptLower === tpLower || promptLower.includes(tpLower));
+            });
+          }
+          return false;
+        });
+
+        if (matchedSkill) {
+          const res = await invoke<string>("run_forged_skill", { skillId: matchedSkill.id })
+            .catch(() => invoke<string>("plugin_forge_execute", { skillId: matchedSkill.id }));
+
+          if (res) {
+            incrementUsageTelemetry("reflex");
+            const skillMsgs = [
+              ...updatedUserMsgs,
+              {
+                id: assistantMsgId,
+                role: "assistant" as const,
+                text: res,
+                actionExecuted: `SkillForge: ${matchedSkill.name}`,
+                timestamp: formattedTime,
+              },
+            ];
+            setMessages(skillMsgs);
+            if (activeSessionId) {
+              setSessions((prev) => {
+                const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: skillMsgs } : s));
+                try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+                return sUpdated;
+              });
+            }
+            voiceRef.current?.speak(res, () => setSpeaking(true), () => setSpeaking(false));
+            return;
+          }
+        }
+      } catch (skillErr) {
+        console.warn("SkillForge trigger check notice:", skillErr);
       }
 
       // 2. Query Gemini/Cloud Brain with streaming and 45s timeout safeguard
@@ -1130,7 +1179,7 @@ export default function App() {
                     <div className="absolute bottom-12 right-0 w-56 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs max-h-72 overflow-y-auto">
                       {[
                         { id: "Auto", label: "Auto Smart Router" },
-                        { id: "gemini", label: "Google Gemini 3.8 Flash" },
+                        { id: "gemini", label: "Google Gemini 2.5 Pro / 2.0" },
                         { id: "groq", label: "Groq Llama 3.3 70B" },
                         { id: "deepseek", label: "DeepSeek V3" },
                         { id: "openai", label: "OpenAI GPT-4o" },
