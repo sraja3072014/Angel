@@ -490,7 +490,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         .filter((p): p is AIProviderConfig => {
           if (!p || !p.enabled) return false;
           if (p.id === "ollama" || p.id === "local_lmstudio") return Boolean(p.endpoint && p.endpoint.trim());
-          return getProviderKeys(p).length > 0;
+          return extractKeysList(p.apiKey).length > 0;
         });
 
       if (configured.length === 0) {
@@ -574,27 +574,27 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       }
     }
 
-    const keyList = getProviderKeys(provider);
+    const keyList = extractKeysList(provider.apiKey);
     const activeKey = keyList[0] || (provider.id === "gemini" ? loadAngelConfig().geminiKey.trim() : "");
 
     if (provider.id === "gemini") {
       if (!activeKey) return { ok: false, message: "Gemini API key is required" };
       const trimmedKey = activeKey.trim();
-      const rawTarget = (provider.defaultModel || "gemini-2.5-flash").replace(/^(models\/)+/, "").trim();
+      const rawTarget = (provider.defaultModel || "gemini-3.8-flash").replace(/^(models\/)+/, "").trim();
       const targetModel =
-        rawTarget.includes("3.8")
-          ? "gemini-2.5-flash"
+        rawTarget.includes("2.5") || rawTarget.includes("3.5") || rawTarget.includes("2.0") || rawTarget.includes("1.5")
+          ? "gemini-3.8-flash"
           : rawTarget;
 
       const modelsToTry = [targetModel];
-      if (!modelsToTry.includes("gemini-2.5-flash")) modelsToTry.push("gemini-2.5-flash");
-      if (!modelsToTry.includes("gemini-2.0-flash")) modelsToTry.push("gemini-2.0-flash");
-      if (!modelsToTry.includes("gemini-2.5-flash-lite")) modelsToTry.push("gemini-2.5-flash-lite");
+      if (targetModel !== "gemini-3.8-flash-lite") {
+        modelsToTry.push("gemini-3.8-flash-lite");
+      }
 
       let lastErrMessage = "";
       for (const modelName of modelsToTry) {
         try {
-          const res = await fetchWithTimeout(
+          const res = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(trimmedKey)}`,
             {
               method: "POST",
@@ -602,8 +602,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
               body: JSON.stringify({
                 contents: [{ parts: [{ text: "ping" }] }],
               }),
-            },
-            8000
+            }
           );
           const latencyMs = Math.round(performance.now() - startTime);
           if (res.ok) {
@@ -622,14 +621,10 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         } catch {
           try {
             const ai = new GoogleGenAI({ apiKey: trimmedKey });
-            const pingPromise = ai.models.generateContent({
+            await ai.models.generateContent({
               model: modelName,
               contents: "Respond with 'ok'",
             });
-            const timeoutPromise = new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error("Timeout")), 8000)
-            );
-            await Promise.race([pingPromise, timeoutPromise]);
             const latencyMs = Math.round(performance.now() - startTime);
             return {
               ok: true,
@@ -647,28 +642,24 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
 
     if (provider.id === "anthropic") {
       if (!activeKey) return { ok: false, message: "Anthropic API key required" };
-      try {
-        const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": activeKey,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-            "dangerously-allow-browser": "true",
-          },
-          body: JSON.stringify({
-            model: provider.defaultModel || "claude-3-5-haiku-latest",
-            max_tokens: 5,
-            messages: [{ role: "user", content: "ping" }],
-          }),
-        }, 8000);
-        const latencyMs = Math.round(performance.now() - startTime);
-        if (res.ok) return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
-        const err = await res.json().catch(() => ({}));
-        return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
-      } catch (err: any) {
-        return { ok: false, message: `Anthropic error: ${err?.message || err}` };
-      }
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": activeKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json",
+          "dangerously-allow-browser": "true",
+        },
+        body: JSON.stringify({
+          model: provider.defaultModel || "claude-3-5-haiku-latest",
+          max_tokens: 5,
+          messages: [{ role: "user", content: "ping" }],
+        }),
+      });
+      const latencyMs = Math.round(performance.now() - startTime);
+      if (res.ok) return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
     }
 
     if (provider.id === "openrouter") {
@@ -747,7 +738,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       headers["X-Title"] = "Angel AI";
     }
 
-    const res = await fetchWithTimeout(targetUrl, {
+    const res = await fetch(targetUrl, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -755,7 +746,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         messages: [{ role: "user", content: "ping" }],
         max_tokens: 5,
       }),
-    }, 8000);
+    });
 
     const latencyMs = Math.round(performance.now() - startTime);
     if (res.ok) {
@@ -1264,7 +1255,7 @@ Return ONLY valid JSON with exact keys:
 Never use destructive commands (rm, del, format).`;
 
       const res = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.8-flash",
         contents: forgePrompt,
       });
       const cleanJson = (res.text || "").replace(/```json|```/g, "").trim();
@@ -1371,7 +1362,8 @@ Never use destructive commands (rm, del, format).`;
     options?: GeminiAskOptions
   ): Promise<string> {
     const keyList = this.getRotatedKeyOrder(provider);
-    const candidateKeys = keyList.length > 0 ? keyList : getProviderKeys(provider);
+    const fallbackKey = loadAngelConfig().geminiKey.trim();
+    const candidateKeys = keyList.length > 0 ? keyList : fallbackKey ? [fallbackKey] : [];
 
     if (candidateKeys.length === 0) throw new Error("Gemini API Key missing");
 
@@ -1386,10 +1378,15 @@ Never use destructive commands (rm, del, format).`;
     }
 
     const cleanModelName = (m: string) => m.replace(/^(models\/)+/, "").trim();
-    const ladder = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
+    const ladder = ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-3.8-pro"];
     if (provider.defaultModel) {
       const customModel = cleanModelName(provider.defaultModel);
-      if (!customModel.includes("3.8")) {
+      if (
+        !customModel.includes("2.5") &&
+        !customModel.includes("3.5") &&
+        !customModel.includes("2.0") &&
+        !customModel.includes("1.5")
+      ) {
         if (!ladder.includes(customModel)) {
           ladder.unshift(customModel);
         } else {
@@ -1409,17 +1406,11 @@ Never use destructive commands (rm, del, format).`;
           let accumulated = "";
           let firstSentenceSpoken = false;
 
-          const streamPromise = ai.models.generateContentStream({
+          const responseStream = await ai.models.generateContentStream({
             model: cleanModelName(model),
             contents: contentParts,
             config: { systemInstruction },
           });
-
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Gemini stream timed out after 8s for ${model}`)), 8000)
-          );
-
-          const responseStream = await Promise.race([streamPromise, timeoutPromise]);
 
           for await (const chunk of responseStream) {
             const chunkText = chunk.text || "";
@@ -1443,7 +1434,7 @@ Never use destructive commands (rm, del, format).`;
         } catch (e: any) {
           const msg = e?.message || "";
           console.warn(`Gemini model ${model} error (${msg}). Cascading to next model...`);
-          // Automatically try next model in ladder
+          // Automatically try next model in ladder ("gemini-3.8-flash-lite")
           continue;
         }
       }
@@ -1491,11 +1482,7 @@ Never use destructive commands (rm, del, format).`;
             ],
             temperature,
           };
-          const proxyPromise = proxyLocalRequest(targetUrl, key ? key.trim() : undefined, postBody);
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`${provider.name} local proxy timed out after 8s`)), 8000)
-          );
-          const data = await Promise.race([proxyPromise, timeoutPromise]);
+          const data = await proxyLocalRequest(targetUrl, key ? key.trim() : undefined, postBody);
           if (data?.error?.message) {
             lastErrorMsg = data.error.message;
             continue;
@@ -1517,7 +1504,7 @@ Never use destructive commands (rm, del, format).`;
       }
 
       try {
-        const res = await fetchWithTimeout(targetUrl, {
+        const res = await fetch(targetUrl, {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -1528,7 +1515,7 @@ Never use destructive commands (rm, del, format).`;
             ],
             temperature,
           }),
-        }, 8000);
+        });
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -1565,7 +1552,7 @@ Never use destructive commands (rm, del, format).`;
     let lastErr = "";
     for (const key of keyList) {
       try {
-        const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
             "x-api-key": key,
@@ -1580,7 +1567,7 @@ Never use destructive commands (rm, del, format).`;
             max_tokens: 1500,
             temperature,
           }),
-        }, 8000);
+        });
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
@@ -1623,11 +1610,7 @@ Never use destructive commands (rm, del, format).`;
       stream: false,
     };
     try {
-      const proxyPromise = proxyLocalRequest(url, undefined, postBody);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Ollama local request timed out after 8s")), 8000)
-      );
-      const data = await Promise.race([proxyPromise, timeoutPromise]);
+      const data = await proxyLocalRequest(url, undefined, postBody);
       const reply = data?.message?.content || "";
       options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
       return reply;
@@ -1666,21 +1649,6 @@ Never use destructive commands (rm, del, format).`;
     }
 
     const providers = loadAIProviders();
-
-    // Fast Zero-Key Check (<10ms):
-    // If zero providers have an active API key or local endpoint, immediately return error in <10ms
-    const hasAnyConfigured = providers.some((p) => {
-      if (!p.enabled || p.id === "auto") return false;
-      if (p.id === "ollama" || p.id === "local_lmstudio") {
-        return Boolean(p.endpoint && p.endpoint.trim());
-      }
-      return getProviderKeys(p).length > 0;
-    });
-
-    if (!hasAnyConfigured) {
-      return "No active AI API key found. Open Menu -> AI Brain and add a Gemini, Groq, or FreeLLMAPI key.";
-    }
-
     const activeModel = localStorage.getItem("angel_primary_model") || "Auto";
     const autoFailover = localStorage.getItem("angel_ai_failover") !== "false";
     const temperature = parseFloat(localStorage.getItem("angel_brain_temperature") || "0.7");
@@ -1717,7 +1685,7 @@ Never use destructive commands (rm, del, format).`;
       if (p.id === "ollama" || p.id === "local_lmstudio") {
         return Boolean(p.endpoint && p.endpoint.trim());
       }
-      return getProviderKeys(p).length > 0;
+      return extractKeysList(p.apiKey).length > 0;
     };
 
     const executionList: AIProviderConfig[] = [];

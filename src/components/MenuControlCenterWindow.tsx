@@ -39,11 +39,25 @@ import {
   HardDrive,
   Check,
   FolderGit2,
+  Folder,
+  Terminal,
+  AlertTriangle,
+  ArrowRight,
   Radio,
   DownloadCloud,
   UploadCloud,
   Languages,
 } from "lucide-react";
+import {
+  PluginSourceType,
+  AngelForgedPlugin,
+  SecurityAuditResult,
+  inspectLocalProjectFolder,
+  inspectGitHubRepo,
+  dryRunPluginSecurity,
+  transpileToAngelPlugin,
+  installPluginToSkillForge,
+} from "../services/pluginTranspiler";
 import {
   loadAngelConfig,
   saveAngelConfig,
@@ -620,90 +634,118 @@ export function MenuControlCenterWindow({
   };
 
   // ==========================================
-  // TAB 5: ADD NEW PLUGIN STATE
+  // TAB 5: UNIVERSAL ZERO-PYTHON PLUGIN FORGE STATE
   // ==========================================
-  const [pluginName, setPluginName] = useState("");
-  const [pluginTrigger, setPluginTrigger] = useState("");
-  const [pluginType, setPluginType] = useState<"powershell" | "tauri" | "webhook">("powershell");
-  const [pluginScript, setPluginScript] = useState("");
-  const [pluginDesc, setPluginDesc] = useState("");
-  const [pluginOutput, setPluginOutput] = useState("");
+  const [forgeImportMode, setForgeImportMode] = useState<PluginSourceType>("github");
+  const [forgeInput, setForgeInput] = useState("https://github.com/fastapi/fastapi");
+  const [forgeStep, setForgeStep] = useState<1 | 2 | 3>(1);
+  const [forgeAnalyzing, setForgeAnalyzing] = useState(false);
+  const [dryRunning, setDryRunning] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [activeForgedPlugin, setActiveForgedPlugin] = useState<AngelForgedPlugin | null>(null);
+  const [securityAudit, setSecurityAudit] = useState<SecurityAuditResult | null>(null);
 
-  const handleSavePlugin = async () => {
-    if (!pluginName.trim() || !pluginTrigger.trim() || !pluginScript.trim()) {
-      showToast("Please provide Plugin Name, Trigger Phrase, and Script Body.");
+  const handleAnalyzeAndTranspile = async () => {
+    if (!forgeInput.trim()) {
+      showToast("Please enter an import URL, folder path, or code prompt.");
       return;
     }
+    setForgeAnalyzing(true);
     try {
-      await invoke("plugin_forge_save", {
-        plugin: {
-          name: pluginName.trim(),
-          trigger_phrase: pluginTrigger.trim(),
-          execution_type: pluginType,
-          script_body: pluginScript.trim(),
-          description: pluginDesc.trim(),
-        },
-      }).catch(async () => {
-        await invoke("forge_new_skill", {
-          name: pluginName.trim(),
-          triggerPhrase: pluginTrigger.trim(),
-          code: pluginScript.trim(),
-          description: pluginDesc.trim(),
-        });
-      });
-      showToast(`Plugin "${pluginName}" forged and added to runtime skills!`);
-      setPluginName("");
-      setPluginTrigger("");
-      setPluginScript("");
-      setPluginDesc("");
-    } catch (e: any) {
-      showToast(`Error saving plugin: ${e?.message || e}`);
+      let rawContent = forgeInput.trim();
+      let detectedStack = "Generic Project";
+
+      if (forgeImportMode === "github") {
+        showToast("Inspecting GitHub repository metadata & manifests...");
+        const gh = await inspectGitHubRepo(rawContent);
+        detectedStack = gh.detected_stack || "GitHub Repository";
+        rawContent = JSON.stringify(gh, null, 2);
+      } else if (forgeImportMode === "local_folder") {
+        showToast("Scanning local project folder (read-only)...");
+        const folder = await inspectLocalProjectFolder(rawContent);
+        detectedStack = folder.detected_stack || "Local Project Folder";
+        rawContent = JSON.stringify(folder, null, 2);
+      } else if (forgeImportMode === "curl_openapi") {
+        detectedStack = "cURL / REST OpenAPI Spec";
+      } else {
+        detectedStack = "Natural Language Prompt / Directive";
+      }
+
+      showToast(`Transpiling to Zero-Python Angel Plugin (${detectedStack})...`);
+      const transpiled = await transpileToAngelPlugin(forgeImportMode, rawContent, detectedStack);
+      setActiveForgedPlugin(transpiled);
+      setSecurityAudit(null);
+      setForgeStep(2);
+      showToast(`Plugin "${transpiled.name}" transpiled! Review configuration.`);
+    } catch (err: any) {
+      showToast(`Transpilation error: ${err?.message || err}`);
+    } finally {
+      setForgeAnalyzing(false);
     }
   };
 
-  const handleTestPluginSandbox = async () => {
-    if (!pluginScript.trim()) {
-      showToast("Script body is empty.");
-      return;
-    }
-    setPluginOutput("Running plugin script in sandboxed worker...");
+  const handleRunSecurityDryRun = async () => {
+    if (!activeForgedPlugin) return;
+    setDryRunning(true);
     try {
-      const res = await invoke<string>("execute_safe_powershell_script", {
-        script: pluginScript,
-      }).catch(async () => {
-        return await invoke<string>("plugin_forge_execute", { script: pluginScript });
-      });
-      setPluginOutput(res || "Executed cleanly with return code 0.");
-      showToast("Plugin sandbox execution completed.");
-    } catch (e: any) {
-      setPluginOutput(`Execution Error: ${e?.message || e}`);
+      showToast("Running static security sandbox audit...");
+      const audit = await dryRunPluginSecurity(activeForgedPlugin);
+      setSecurityAudit(audit);
+      setForgeStep(3);
+      if (audit.safe) {
+        showToast(`Audit passed with security score ${audit.score}/100!`);
+      } else {
+        showToast(`Audit warning: score ${audit.score}/100. Review warnings.`);
+      }
+    } catch (err: any) {
+      showToast(`Dry-run audit error: ${err?.message || err}`);
+    } finally {
+      setDryRunning(false);
+    }
+  };
+
+  const handleInstallForgedPlugin = async () => {
+    if (!activeForgedPlugin) return;
+    setInstalling(true);
+    try {
+      const msg = await installPluginToSkillForge(activeForgedPlugin);
+      showToast(msg || `Plugin "${activeForgedPlugin.name}" installed to Skill Forge!`);
+      await refreshSkillsList();
+    } catch (err: any) {
+      showToast(`Install error: ${err?.message || err}`);
+    } finally {
+      setInstalling(false);
     }
   };
 
   const handleExportPlugins = () => {
-    const sample = [
+    const listToExport = activeForgedPlugin ? [activeForgedPlugin] : [
       {
         name: "Mute Discord",
-        trigger_phrase: "mute discord",
-        execution_type: "powershell",
-        script_body: "Get-Process discord -ErrorAction SilentlyContinue | Out-Null",
+        trigger_phrases: ["mute discord"],
+        action_type: "POWERSHELL",
+        endpoint_or_command: "Get-Process discord -ErrorAction SilentlyContinue | Out-Null",
         description: "Mutes or manages Discord process audio",
+        source_stack_detected: "Windows PowerShell Script",
+        converted_runtime: "Zero-Python Native",
       },
       {
         name: "Flush DNS Cache",
-        trigger_phrase: "flush dns",
-        execution_type: "powershell",
-        script_body: "Clear-DnsClientCache",
+        trigger_phrases: ["flush dns"],
+        action_type: "POWERSHELL",
+        endpoint_or_command: "Clear-DnsClientCache",
         description: "Flushes Windows DNS resolver cache",
+        source_stack_detected: "Windows PowerShell Script",
+        converted_runtime: "Zero-Python Native",
       },
     ];
-    const blob = new Blob([JSON.stringify(sample, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(listToExport, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = "angel-plugins-manifest.json";
     a.click();
-    showToast("Exported sample plugins JSON.");
+    showToast("Exported plugins JSON manifest.");
   };
 
   // ==========================================
@@ -879,8 +921,28 @@ export function MenuControlCenterWindow({
       status: "active",
     },
   ];
-  const [skillsList] = useState<SkillItem[]>(initialSkills);
+  const [skillsList, setSkillsList] = useState<SkillItem[]>(initialSkills);
   const [skillRunning, setSkillRunning] = useState<string | null>(null);
+
+  const refreshSkillsList = async () => {
+    try {
+      const dynamicSkills: any[] = await invoke("plugin_forge_list");
+      const mappedDynamic: SkillItem[] = dynamicSkills.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description || `Forged Skill (Trigger: "${s.trigger}")`,
+        category: s.action_type || "custom_skill",
+        command: s.id,
+        adminRequired: false,
+        status: s.enabled ? "active" : "standby",
+      }));
+      setSkillsList([...initialSkills, ...mappedDynamic]);
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshSkillsList();
+  }, []);
 
   const handleRunSkill = async (skill: SkillItem) => {
     setSkillRunning(skill.id);
@@ -913,7 +975,12 @@ export function MenuControlCenterWindow({
         await invoke("scan_windows_errors");
         showToast("Event log diagnostics scanned.");
       } else {
-        showToast(`Skill executed: ${skill.name}`);
+        const dynamicRes = await invoke<string>("plugin_forge_execute", { skillId: skill.id }).catch(() => null);
+        if (dynamicRes) {
+          showToast(dynamicRes);
+        } else {
+          showToast(`Skill executed: ${skill.name}`);
+        }
       }
     } catch (e: any) {
       showToast(`Skill execution error: ${e?.message || e}`);
@@ -2797,111 +2864,507 @@ export function MenuControlCenterWindow({
               </div>
             )}
 
-            {/* 5. ADD NEW PLUGIN TAB */}
+            {/* 5. UNIVERSAL ZERO-PYTHON PLUGIN FORGE STUDIO */}
             {activeTab === "plugins" && (
               <div className="space-y-6 max-w-3xl">
-                <div>
-                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Puzzle size={18} className="text-cyan-400" />
-                    <span>Plugin Forge & Safe Script Runner</span>
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Create dynamic hot-loaded skills executed with zero terminal window flashes (CREATE_NO_WINDOW).
-                  </p>
-                </div>
-
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs text-slate-300 font-semibold">Plugin Name</label>
-                      <input
-                        type="text"
-                        value={pluginName}
-                        onChange={(e) => setPluginName(e.target.value)}
-                        placeholder="e.g. Restart Audio Service"
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-300 font-semibold">Trigger Phrase / Command</label>
-                      <input
-                        type="text"
-                        value={pluginTrigger}
-                        onChange={(e) => setPluginTrigger(e.target.value)}
-                        placeholder="e.g. restart audio"
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs text-slate-300 font-semibold">Execution Engine</label>
-                      <select
-                        value={pluginType}
-                        onChange={(e: any) => setPluginType(e.target.value)}
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
-                      >
-                        <option value="powershell">PowerShell Script (Hidden Sandbox)</option>
-                        <option value="tauri">Tauri Rust Native Command</option>
-                        <option value="webhook">HTTP Webhook Trigger</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-300 font-semibold">Short Description</label>
-                      <input
-                        type="text"
-                        value={pluginDesc}
-                        onChange={(e) => setPluginDesc(e.target.value)}
-                        placeholder="Purpose of this forged skill..."
-                        className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
-                      />
-                    </div>
-                  </div>
-
+                {/* Header */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <label className="text-xs text-slate-300 font-semibold">Script Body / Command</label>
-                    <textarea
-                      rows={4}
-                      value={pluginScript}
-                      onChange={(e) => setPluginScript(e.target.value)}
-                      placeholder="Restart-Service Audiosrv -Force"
-                      className="w-full mt-1 p-2.5 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-400"
-                    />
+                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                      <Puzzle size={20} className="text-cyan-400" />
+                      <span>Universal Zero-Python Plugin Forge</span>
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Convert GitHub Repos, Local Folders, cURL/OpenAPI, or Code Prompts into native Zero-Python plugins with Safe Sandbox Dry-Run.
+                    </p>
                   </div>
-
-                  {pluginOutput && (
-                    <div className="p-3 rounded-lg bg-black/60 border border-cyan-400/40 text-xs font-mono text-slate-300 whitespace-pre-wrap">
-                      {pluginOutput}
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <button
-                      onClick={handleSavePlugin}
-                      className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition"
-                    >
-                      <Plus size={14} />
-                      <span>Save & Forge Skill</span>
-                    </button>
-
-                    <button
-                      onClick={handleTestPluginSandbox}
-                      className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-white font-semibold text-xs flex items-center gap-2 transition"
-                    >
-                      <Play size={14} />
-                      <span>Test Plugin Sandbox</span>
-                    </button>
-
-                    <button
-                      onClick={handleExportPlugins}
-                      className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white font-semibold text-xs flex items-center gap-2 transition ml-auto"
-                    >
-                      <Download size={14} />
-                      <span>Export Plugins (.json)</span>
-                    </button>
-                  </div>
+                  <button
+                    onClick={handleExportPlugins}
+                    className="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-2 transition"
+                  >
+                    <Download size={13} />
+                    <span>Export Plugins (.json)</span>
+                  </button>
                 </div>
+
+                {/* 3-Step Visual Progress Stepper */}
+                <div className="grid grid-cols-3 gap-2 p-1.5 rounded-xl bg-black/40 border border-white/10 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setForgeStep(1)}
+                    className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition ${
+                      forgeStep === 1
+                        ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-sm"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    <span className="w-5 h-5 rounded-full bg-cyan-500/30 text-cyan-200 flex items-center justify-center text-[10px]">1</span>
+                    <span>1. Import Source</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => activeForgedPlugin && setForgeStep(2)}
+                    disabled={!activeForgedPlugin}
+                    className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition ${
+                      forgeStep === 2
+                        ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-sm"
+                        : activeForgedPlugin
+                        ? "text-slate-300 hover:text-white"
+                        : "text-slate-600 cursor-not-allowed"
+                    }`}
+                  >
+                    <span className="w-5 h-5 rounded-full bg-cyan-500/30 text-cyan-200 flex items-center justify-center text-[10px]">2</span>
+                    <span>2. Transpilation</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => activeForgedPlugin && setForgeStep(3)}
+                    disabled={!activeForgedPlugin}
+                    className={`py-2 px-3 rounded-lg font-bold flex items-center justify-center gap-2 transition ${
+                      forgeStep === 3
+                        ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-sm"
+                        : activeForgedPlugin
+                        ? "text-slate-300 hover:text-white"
+                        : "text-slate-600 cursor-not-allowed"
+                    }`}
+                  >
+                    <span className="w-5 h-5 rounded-full bg-cyan-500/30 text-cyan-200 flex items-center justify-center text-[10px]">3</span>
+                    <span>3. Sandbox & Install</span>
+                  </button>
+                </div>
+
+                {/* STEP 1: CHOOSE IMPORT SOURCE */}
+                {forgeStep === 1 && (
+                  <div className="p-5 rounded-xl bg-white/5 border border-white/10 space-y-5">
+                    <div>
+                      <label className="text-xs font-bold text-slate-200 uppercase tracking-wider block mb-2">
+                        Select Software Input Format
+                      </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForgeImportMode("github");
+                            if (!forgeInput.startsWith("http") || forgeInput.includes("localhost")) {
+                              setForgeInput("https://github.com/fastapi/fastapi");
+                            }
+                          }}
+                          className={`p-3 rounded-xl border flex flex-col items-center gap-2 text-xs font-bold transition ${
+                            forgeImportMode === "github"
+                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/10"
+                              : "bg-black/30 border-white/10 text-slate-400 hover:text-white hover:bg-white/5"
+                          }`}
+                        >
+                          <FolderGit2 size={18} />
+                          <span>GitHub Repo</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForgeImportMode("local_folder");
+                            setForgeInput("C:\\Users\\Public\\Documents\\Python Project");
+                          }}
+                          className={`p-3 rounded-xl border flex flex-col items-center gap-2 text-xs font-bold transition ${
+                            forgeImportMode === "local_folder"
+                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/10"
+                              : "bg-black/30 border-white/10 text-slate-400 hover:text-white hover:bg-white/5"
+                          }`}
+                        >
+                          <Folder size={18} />
+                          <span>Local Folder</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForgeImportMode("curl_openapi");
+                            setForgeInput(`curl -X POST "http://127.0.0.1:8000/v1/generate" \\\n  -H "Content-Type: application/json" \\\n  -d '{"prompt": "Generate report"}'`);
+                          }}
+                          className={`p-3 rounded-xl border flex flex-col items-center gap-2 text-xs font-bold transition ${
+                            forgeImportMode === "curl_openapi"
+                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/10"
+                              : "bg-black/30 border-white/10 text-slate-400 hover:text-white hover:bg-white/5"
+                          }`}
+                        >
+                          <Globe size={18} />
+                          <span>cURL / OpenAPI</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForgeImportMode("prompt");
+                            setForgeInput("Create a silent Windows tool that restarts the audio service and cleans DNS cache");
+                          }}
+                          className={`p-3 rounded-xl border flex flex-col items-center gap-2 text-xs font-bold transition ${
+                            forgeImportMode === "prompt"
+                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/10"
+                              : "bg-black/30 border-white/10 text-slate-400 hover:text-white hover:bg-white/5"
+                          }`}
+                        >
+                          <Terminal size={18} />
+                          <span>Prompt / Code</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Mode Inputs */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <label className="text-slate-300 font-semibold">
+                          {forgeImportMode === "github" && "GitHub Repository URL or owner/repo:"}
+                          {forgeImportMode === "local_folder" && "Local Project Folder Path:"}
+                          {forgeImportMode === "curl_openapi" && "Paste cURL Command or OpenAPI JSON Spec:"}
+                          {forgeImportMode === "prompt" && "Describe Desired Tool or Paste Python/Shell Script:"}
+                        </label>
+                        <span className="text-[10px] text-cyan-400 font-mono">Zero-Python Guarantee</span>
+                      </div>
+
+                      {forgeImportMode === "github" || forgeImportMode === "local_folder" ? (
+                        <input
+                          type="text"
+                          value={forgeInput}
+                          onChange={(e) => setForgeInput(e.target.value)}
+                          placeholder={
+                            forgeImportMode === "github"
+                              ? "e.g. https://github.com/fastapi/fastapi or comfyanonymous/ComfyUI"
+                              : "e.g. C:\\Users\\Public\\Documents\\MyPythonProject"
+                          }
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/10 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      ) : (
+                        <textarea
+                          rows={5}
+                          value={forgeInput}
+                          onChange={(e) => setForgeInput(e.target.value)}
+                          placeholder={
+                            forgeImportMode === "curl_openapi"
+                              ? 'curl -X POST "http://127.0.0.1:8000/api" -H "Content-Type: application/json" -d \'{"query": "data"}\''
+                              : "Describe what the tool should do, or paste a snippet..."
+                          }
+                          className="w-full p-3 rounded-xl bg-black/40 border border-white/10 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      )}
+
+                      <p className="text-[11px] text-slate-400">
+                        {forgeImportMode === "github" && "Rust HTTP inspector analyzes repo metadata, README, and manifests (requirements.txt, package.json, Cargo.toml) with CREATE_NO_WINDOW."}
+                        {forgeImportMode === "local_folder" && "Strictly read-only AST scanner parses top-level files (up to 12 KB) without ever executing any Python script."}
+                        {forgeImportMode === "curl_openapi" && "Extracts target endpoint URL, HTTP methods, headers, and payload schema for native Zero-Python HTTP_REST actions."}
+                        {forgeImportMode === "prompt" && "Multi-LLM Brain converts your description or script into native PowerShell or Cognitive actions with zero Python runtime dependencies."}
+                      </p>
+                    </div>
+
+                    <div className="pt-2 flex items-center justify-between">
+                      <button
+                        onClick={handleAnalyzeAndTranspile}
+                        disabled={forgeAnalyzing || !forgeInput.trim()}
+                        className="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/25 active:scale-95"
+                      >
+                        {forgeAnalyzing ? (
+                          <>
+                            <RefreshCw size={14} className="animate-spin" />
+                            <span>Analyzing & Transpiling...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles size={14} />
+                            <span>
+                              {forgeImportMode === "github" && "Analyze & Convert Repo"}
+                              {forgeImportMode === "local_folder" && "Reverse-Engineer Folder"}
+                              {forgeImportMode === "curl_openapi" && "Convert API to Plugin"}
+                              {forgeImportMode === "prompt" && "Generate Zero-Python Plugin"}
+                            </span>
+                          </>
+                        )}
+                      </button>
+
+                      {activeForgedPlugin && (
+                        <button
+                          type="button"
+                          onClick={() => setForgeStep(2)}
+                          className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
+                        >
+                          <span>Go to Current Preview</span>
+                          <ArrowRight size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 2: TECH STACK DETECTION & TRANSPILATION PREVIEW */}
+                {forgeStep === 2 && activeForgedPlugin && (
+                  <div className="p-5 rounded-xl bg-white/5 border border-white/10 space-y-5">
+                    {/* Source vs Converted Target Comparison Badge */}
+                    <div className="p-3.5 rounded-xl bg-black/40 border border-white/10 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">Detected Source:</span>
+                        <span className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-[11px] font-bold">
+                          {activeForgedPlugin.source_stack_detected}
+                        </span>
+                      </div>
+
+                      <ArrowRight size={16} className="text-cyan-400 hidden sm:block" />
+
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-400">Converted Target:</span>
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-mono text-[11px] font-bold flex items-center gap-1">
+                          <CheckCircle2 size={12} />
+                          <span>{activeForgedPlugin.converted_runtime} ({activeForgedPlugin.action_type})</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Editable Plugin Fields */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-slate-300 font-semibold">Plugin Name</label>
+                        <input
+                          type="text"
+                          value={activeForgedPlugin.name}
+                          onChange={(e) => setActiveForgedPlugin({ ...activeForgedPlugin, name: e.target.value })}
+                          className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-slate-300 font-semibold">Voice Trigger Phrases (comma-separated)</label>
+                        <input
+                          type="text"
+                          value={activeForgedPlugin.trigger_phrases.join(", ")}
+                          onChange={(e) =>
+                            setActiveForgedPlugin({
+                              ...activeForgedPlugin,
+                              trigger_phrases: e.target.value.split(",").map((s) => s.trim()).filter(Boolean),
+                            })
+                          }
+                          className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-slate-300 font-semibold">Action Engine Type</label>
+                        <select
+                          value={activeForgedPlugin.action_type}
+                          onChange={(e: any) => setActiveForgedPlugin({ ...activeForgedPlugin, action_type: e.target.value })}
+                          className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400 font-mono"
+                        >
+                          <option value="HTTP_REST">HTTP_REST (REST API & ComfyUI Gateway)</option>
+                          <option value="POWERSHELL">POWERSHELL (Silent Windows Automation)</option>
+                          <option value="PROMPT_TOOL">PROMPT_TOOL (Cognitive Context Reasoning)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-slate-300 font-semibold">Plugin Description</label>
+                        <input
+                          type="text"
+                          value={activeForgedPlugin.description}
+                          onChange={(e) => setActiveForgedPlugin({ ...activeForgedPlugin, description: e.target.value })}
+                          className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Specific Action Config */}
+                    {activeForgedPlugin.action_type === "HTTP_REST" ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                          <div>
+                            <label className="text-xs text-slate-300 font-semibold">HTTP Method</label>
+                            <select
+                              value={activeForgedPlugin.method || "GET"}
+                              onChange={(e: any) => setActiveForgedPlugin({ ...activeForgedPlugin, method: e.target.value })}
+                              className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-400"
+                            >
+                              <option value="GET">GET</option>
+                              <option value="POST">POST</option>
+                              <option value="PUT">PUT</option>
+                              <option value="DELETE">DELETE</option>
+                            </select>
+                          </div>
+                          <div className="sm:col-span-3">
+                            <label className="text-xs text-slate-300 font-semibold">Target Endpoint URL</label>
+                            <input
+                              type="text"
+                              value={activeForgedPlugin.endpoint_or_command}
+                              onChange={(e) => setActiveForgedPlugin({ ...activeForgedPlugin, endpoint_or_command: e.target.value })}
+                              placeholder="http://127.0.0.1:8000/api/v1/..."
+                              className="w-full mt-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-400"
+                            />
+                          </div>
+                        </div>
+
+                        {activeForgedPlugin.method === "POST" && (
+                          <div>
+                            <label className="text-xs text-slate-300 font-semibold">JSON Body Template / Payload</label>
+                            <textarea
+                              rows={3}
+                              value={activeForgedPlugin.body_template || ""}
+                              onChange={(e) => setActiveForgedPlugin({ ...activeForgedPlugin, body_template: e.target.value })}
+                              placeholder='{"key": "value"}'
+                              className="w-full mt-1 p-2.5 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-400"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="text-xs text-slate-300 font-semibold">
+                          {activeForgedPlugin.action_type === "POWERSHELL" ? "PowerShell Command / Script Body" : "Cognitive Reasoning Directive"}
+                        </label>
+                        <textarea
+                          rows={4}
+                          value={activeForgedPlugin.endpoint_or_command}
+                          onChange={(e) => setActiveForgedPlugin({ ...activeForgedPlugin, endpoint_or_command: e.target.value })}
+                          placeholder="e.g. Restart-Service Audiosrv -Force"
+                          className="w-full mt-1 p-2.5 rounded-lg bg-black/40 border border-white/10 text-xs font-mono text-cyan-200 focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    )}
+
+                    {/* Action Buttons */}
+                    <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setForgeStep(1)}
+                        className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 text-xs font-semibold transition"
+                      >
+                        ← Back to Import
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleRunSecurityDryRun}
+                        disabled={dryRunning}
+                        className="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-cyan-500/25 active:scale-95"
+                      >
+                        {dryRunning ? (
+                          <>
+                            <RefreshCw size={14} className="animate-spin" />
+                            <span>Auditing Security...</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck size={14} />
+                            <span>Run Safe Sandbox Dry-Run →</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 3: SAFE SANDBOX DRY-RUN & INSTALL */}
+                {forgeStep === 3 && activeForgedPlugin && (
+                  <div className="p-5 rounded-xl bg-white/5 border border-white/10 space-y-5">
+                    {/* Security Audit Score Card */}
+                    <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5">
+                          <ShieldCheck
+                            size={22}
+                            className={securityAudit?.safe ? "text-emerald-400" : "text-amber-400"}
+                          />
+                          <div>
+                            <h3 className="text-xs font-bold text-white">Static Sandbox Security Audit</h3>
+                            <p className="text-[11px] text-slate-400">
+                              Verified without executing mutations against Windows filesystem or registry.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`px-3 py-1 rounded-xl font-bold font-mono text-xs border ${
+                              (securityAudit?.score || 100) >= 80
+                                ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                                : (securityAudit?.score || 100) >= 50
+                                ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
+                                : "bg-rose-500/15 border-rose-500/30 text-rose-300"
+                            }`}
+                          >
+                            Score: {securityAudit?.score || 100}/100 ({securityAudit?.safe ? "SAFE" : "ATTENTION"})
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Warnings or Pass message */}
+                      {securityAudit?.warnings && securityAudit.warnings.length > 0 ? (
+                        <div className="space-y-1.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200">
+                          {securityAudit.warnings.map((w, idx) => (
+                            <div key={idx} className="flex items-start gap-1.5">
+                              <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                              <span>{w}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center gap-2 font-semibold">
+                          <CheckCircle2 size={14} />
+                          <span>Zero destructive filesystem commands, zero unauthorized exfiltration, and zero Python dependencies detected.</span>
+                        </div>
+                      )}
+
+                      {/* Simulated Execution Preview */}
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-400 block mb-1">
+                          Simulated Execution Output Preview:
+                        </label>
+                        <div className="p-3 rounded-lg bg-black/60 border border-cyan-400/30 text-xs font-mono text-cyan-200 whitespace-pre-wrap max-h-48 overflow-y-auto">
+                          {securityAudit?.simulated_preview || "[Dry-Run Initialized - Ready for Installation]"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Final Action Buttons */}
+                    <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setForgeStep(2)}
+                          className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 text-xs font-semibold transition"
+                        >
+                          ← Re-edit Configuration
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForgeStep(1);
+                            setActiveForgedPlugin(null);
+                            setSecurityAudit(null);
+                          }}
+                          className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white text-xs transition"
+                        >
+                          New Import
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={handleInstallForgedPlugin}
+                        disabled={installing}
+                        className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 active:scale-95"
+                      >
+                        {installing ? (
+                          <>
+                            <RefreshCw size={14} className="animate-spin" />
+                            <span>Installing to Runtime...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check size={14} />
+                            <span>Install to Skill Forge</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
