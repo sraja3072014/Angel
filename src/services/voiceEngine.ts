@@ -7,6 +7,10 @@ export interface AngelVoiceConfig {
   vadTimeout: number; // 800 - 2500ms, default 1400
   languageMode: "auto" | "ta-IN" | "en-IN"; // default "auto"
   ttsEngine: "edge" | "multimodal" | "webspeech" | "piper_sapi"; // default "edge"
+  voicePersona: "ta-IN-PallaviNeural" | "ta-IN-ValluvarNeural" | "en-IN-NeerjaNeural" | "en-GB-SoniaNeural"; // default "ta-IN-PallaviNeural"
+  volume: number; // 0 - 100, default 85
+  speed: number; // 0.5 - 2.0, default 1.0
+  pitch: number; // -20 - +20, default 0
 }
 
 export const DEFAULT_VOICE_CONFIG: AngelVoiceConfig = {
@@ -14,6 +18,10 @@ export const DEFAULT_VOICE_CONFIG: AngelVoiceConfig = {
   vadTimeout: 1400,
   languageMode: "auto",
   ttsEngine: "edge",
+  voicePersona: "ta-IN-PallaviNeural",
+  volume: 85,
+  speed: 1.0,
+  pitch: 0,
 };
 
 export function loadAngelVoiceConfig(): AngelVoiceConfig {
@@ -40,6 +48,7 @@ export class AngelVoiceEngine {
   private isMuted = false;
   private isWakeWordEnabled = false;
 
+  private currentAudio: HTMLAudioElement | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private audioStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -90,6 +99,13 @@ export class AngelVoiceEngine {
 
   public stopSpeaking() {
     this.isSpeaking = false;
+    if (this.currentAudio) {
+      try {
+        this.currentAudio.pause();
+        this.currentAudio.currentTime = 0;
+      } catch {}
+      this.currentAudio = null;
+    }
     if ("speechSynthesis" in window) {
       try {
         window.speechSynthesis.cancel();
@@ -360,23 +376,77 @@ export class AngelVoiceEngine {
       const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
       const voiceCfg = loadAngelVoiceConfig();
 
-      if (voiceCfg.ttsEngine === "webspeech") {
-        await this.speakWebSpeech(cleanText, hasTamil);
+      // Determine appropriate neural voice
+      let chosenVoice: string = voiceCfg.voicePersona || (hasTamil ? "ta-IN-PallaviNeural" : "en-IN-NeerjaNeural");
+      if (hasTamil && !chosenVoice.startsWith("ta-")) {
+        chosenVoice = "ta-IN-PallaviNeural";
+      }
+
+      // 1. If explicit Web Speech is chosen AND text has no Tamil characters
+      if (voiceCfg.ttsEngine === "webspeech" && !hasTamil) {
+        await this.speakWebSpeech(cleanText, false);
       } else {
+        // 2. High-Fidelity Rust Neural TTS with Edge & Google fallback
         try {
-          await invoke("speak_offline_tts", { text: cleanText, isTamil: hasTamil });
-        } catch {
-          await this.speakWebSpeech(cleanText, hasTamil);
+          const ratePercent = Math.round(((voiceCfg.speed ?? 1.0) - 1.0) * 100);
+          const pitchHz = voiceCfg.pitch ?? 0;
+          const base64Audio = await invoke<string>("synthesize_neural_tts", {
+            text: cleanText,
+            voice: chosenVoice,
+            ratePercent,
+            pitchHz,
+          });
+
+          await this.playAudioBase64(base64Audio, voiceCfg);
+        } catch (err) {
+          console.warn("Neural TTS invocation error:", err);
+          // When Tamil text is present, NEVER fall back to Windows English SAPI!
+          if (hasTamil) {
+            await this.speakWebSpeech(cleanText, true);
+          } else {
+            try {
+              await invoke("speak_offline_tts", { text: cleanText, isTamil: false });
+            } catch {
+              await this.speakWebSpeech(cleanText, false);
+            }
+          }
         }
       }
-    } catch {
+    } catch (outerErr) {
+      console.warn("Voice speak error:", outerErr);
       const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
-      await this.speakWebSpeech(cleanText, hasTamil);
+      if (hasTamil) {
+        await this.speakWebSpeech(cleanText, true);
+      } else {
+        await this.speakWebSpeech(cleanText, false);
+      }
     } finally {
       this.isSpeaking = false;
       onEnd?.();
       this.resumeListeningIfActive();
     }
+  }
+
+  private async playAudioBase64(dataUrl: string, cfg: AngelVoiceConfig): Promise<void> {
+    const audio = new Audio(dataUrl);
+    audio.volume = Math.max(0, Math.min(1, (cfg.volume ?? 85) / 100));
+    audio.playbackRate = Math.max(0.5, Math.min(2.0, cfg.speed ?? 1.0));
+    this.currentAudio = audio;
+
+    await new Promise<void>((resolve) => {
+      audio.onended = () => {
+        this.currentAudio = null;
+        resolve();
+      };
+      audio.onerror = () => {
+        this.currentAudio = null;
+        resolve();
+      };
+      audio.play().catch(() => {
+        this.currentAudio = null;
+        resolve();
+      });
+    });
   }
 
   private async speakWebSpeech(text: string, isTamil: boolean): Promise<void> {
@@ -451,6 +521,7 @@ export class AngelVoiceEngine {
   private async transcribeBlob(blob: Blob, mimeType: string) {
     const cfg = loadAngelConfig();
 
+    // 1. Google Gemini Multimodal Audio (Gemini 3.8 Flash / Flash-Lite / Pro)
     if (navigator.onLine && cfg.geminiKey) {
       try {
         const base64Audio = await this.blobToBase64(blob);
@@ -464,7 +535,7 @@ export class AngelVoiceEngine {
               model: cleanModelName(model),
               contents: [
                 { inlineData: { mimeType, data: base64Audio } },
-                "Transcribe this audio accurately into text (Tamil, English, or mixed Tanglish). Return ONLY the spoken words, nothing else.",
+                "Transcribe this user's voice accurately. The user may speak Tamil, Tanglish (Tamil mixed with English), or English. Output the exact spoken words naturally.",
               ],
             });
             const text = (resp.text || "").trim();
@@ -480,6 +551,35 @@ export class AngelVoiceEngine {
       } catch {}
     }
 
+    // 2. Groq Whisper Large V3 Turbo Multimodal Audio
+    if (navigator.onLine && (cfg as any).groqKey) {
+      try {
+        const formData = new FormData();
+        formData.append("file", blob, "voice.webm");
+        formData.append("model", "whisper-large-v3-turbo");
+        formData.append("prompt", "Tamil, Tanglish, and English conversational audio transcription.");
+
+        const resp = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${(cfg as any).groqKey}`,
+          },
+          body: formData,
+        });
+
+        if (resp.ok) {
+          const data = await resp.json();
+          const text = (data.text || "").trim();
+          if (text) {
+            this.onStatusChange(`Command: "${text}"`, false);
+            this.onCommandRecognized(text);
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Fallback to Windows SAPI Offline Mic
     await this.runRustOfflineMic();
   }
 

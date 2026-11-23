@@ -69,7 +69,6 @@ import {
   AngelVoiceConfig,
   loadAngelVoiceConfig,
   saveAngelVoiceConfig,
-  AngelVoiceEngine,
 } from "../services/voiceEngine";
 
 interface MenuControlCenterProps {
@@ -584,20 +583,47 @@ export function MenuControlCenterWindow({
   const handleTestVoice = async (lang: "ta" | "en") => {
     const text =
       lang === "ta"
-        ? "வணக்கம் ராஜா, நான் ஏஞ்சல் AI. உங்கள் கட்டளைக்குத் தயாராக இருக்கிறேன்."
-        : "Hello Raja, Project Angel AI neural voice synthesis is operational and ready.";
-    setVoiceTestStatus(`Testing ${lang === "ta" ? "Tamil" : "English"} neural voice...`);
+        ? "வணக்கம் ராஜா, நான் ஏஞ்சல் ஏஐ. இப்போது என் தமிழ் குரல் தெளிவாகக் கேட்கிறதா?"
+        : "Hello Raja, Angel AI voice calibration is online.";
+    setVoiceTestStatus(`Synthesizing ${lang === "ta" ? "Tamil Neural" : "English"} Audio...`);
     showToast(`Synthesizing ${lang === "ta" ? "Tamil" : "English"} voice...`);
     try {
-      const engine = new AngelVoiceEngine(() => {}, () => {}, () => {});
-      await engine.speak(
+      const voice =
+        lang === "ta"
+          ? voiceConfig.voicePersona && voiceConfig.voicePersona.startsWith("ta-")
+            ? voiceConfig.voicePersona
+            : "ta-IN-PallaviNeural"
+          : "en-IN-NeerjaNeural";
+
+      const ratePercent = Math.round(((voiceConfig.speed ?? 1.0) - 1.0) * 100);
+      const pitchHz = voiceConfig.pitch ?? 0;
+
+      const base64Audio = await invoke<string>("synthesize_neural_tts", {
         text,
-        () => setVoiceTestStatus(`Speaking ${lang === "ta" ? "Tamil" : "English"}...`),
-        () => setVoiceTestStatus(`Completed ${lang === "ta" ? "Tamil" : "English"} synthesis.`)
-      );
+        voice,
+        ratePercent,
+        pitchHz,
+      });
+
+      setVoiceTestStatus(`Playing ${lang === "ta" ? "Tamil Neural Audio..." : "English Audio..."}`);
+      const audio = new Audio(base64Audio);
+      audio.volume = Math.max(0, Math.min(1, (voiceConfig.volume ?? 85) / 100));
+      audio.playbackRate = Math.max(0.5, Math.min(2.0, voiceConfig.speed ?? 1.0));
+
+      await new Promise<void>((resolve, reject) => {
+        audio.onended = () => {
+          setVoiceTestStatus(`Completed ${lang === "ta" ? "Tamil Neural" : "English"} playback.`);
+          resolve();
+        };
+        audio.onerror = (e) => {
+          setVoiceTestStatus(`Audio playback error.`);
+          reject(e);
+        };
+        audio.play().catch(reject);
+      });
     } catch (err: any) {
-      setVoiceTestStatus(`Error: ${err.message || String(err)}`);
-      showToast(`Voice test failed: ${err.message || String(err)}`);
+      setVoiceTestStatus(`Test failed: ${err.message || String(err)}`);
+      showToast(`Voice test error: ${err.message || String(err)}`);
     }
   };
 
@@ -2549,6 +2575,191 @@ export function MenuControlCenterWindow({
                   </div>
                 </div>
 
+                {/* Neural Voice Persona Selector */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div>
+                    <div className="text-xs font-semibold text-white flex items-center gap-2">
+                      <Sparkles size={15} className="text-cyan-400" />
+                      <span>Neural Voice Persona</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Select high-fidelity neural voice identity for conversational replies
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVoiceConfig((prev) => ({ ...prev, voicePersona: "ta-IN-PallaviNeural" }))
+                      }
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                        voiceConfig.voicePersona === "ta-IN-PallaviNeural" || !voiceConfig.voicePersona
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-xs font-bold">Pallavi</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-cyan-500/30 text-cyan-300">
+                          Tamil Female
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Natural & Clear. Fluent native Tamil articulation with expressive intonation.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVoiceConfig((prev) => ({ ...prev, voicePersona: "ta-IN-ValluvarNeural" }))
+                      }
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                        voiceConfig.voicePersona === "ta-IN-ValluvarNeural"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-xs font-bold">Valluvar</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300">
+                          Tamil Male
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Deep & Authoritative. Classical Tamil male neural voice with balanced pacing.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVoiceConfig((prev) => ({ ...prev, voicePersona: "en-IN-NeerjaNeural" }))
+                      }
+                      className={`p-3 rounded-xl border text-left transition flex flex-col justify-between ${
+                        voiceConfig.voicePersona === "en-IN-NeerjaNeural"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full mb-1">
+                        <span className="text-xs font-bold">Neerja</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-indigo-500/20 text-indigo-300">
+                          Indian English
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">
+                        Indian English & Tanglish. Seamlessly articulates mixed code-switched dialogues.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3 Voice Range Sliders (Real-Time Adjustable) */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-white flex items-center gap-2">
+                        <Sliders size={15} className="text-cyan-400" />
+                        <span>Voice Output Tuning (Volume, Speed & Pitch)</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        Fine-tune synthesis parameters in real-time
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-1">
+                    {/* Slider 1: Voice Volume */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-300 font-medium">Voice Volume</span>
+                        <span className="font-mono text-cyan-400 font-bold">
+                          {voiceConfig.volume ?? 85}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={voiceConfig.volume ?? 85}
+                        onChange={(e) =>
+                          setVoiceConfig((prev) => ({
+                            ...prev,
+                            volume: parseInt(e.target.value, 10),
+                          }))
+                        }
+                        className="w-full accent-cyan-400 bg-slate-800 h-1.5 rounded-lg cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>Mute (0%)</span>
+                        <span>Standard (85%)</span>
+                        <span>Maximum (100%)</span>
+                      </div>
+                    </div>
+
+                    {/* Slider 2: Speech Speed / Rate */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-300 font-medium">Speech Speed / Rate</span>
+                        <span className="font-mono text-cyan-400 font-bold">
+                          {(voiceConfig.speed ?? 1.0).toFixed(2)}x
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2.0"
+                        step="0.05"
+                        value={voiceConfig.speed ?? 1.0}
+                        onChange={(e) =>
+                          setVoiceConfig((prev) => ({
+                            ...prev,
+                            speed: parseFloat(e.target.value),
+                          }))
+                        }
+                        className="w-full accent-cyan-400 bg-slate-800 h-1.5 rounded-lg cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>Slow (0.5x)</span>
+                        <span>Normal (1.0x)</span>
+                        <span>Fast (2.0x)</span>
+                      </div>
+                    </div>
+
+                    {/* Slider 3: Voice Pitch / Tone */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-300 font-medium">Voice Pitch / Tone</span>
+                        <span className="font-mono text-cyan-400 font-bold">
+                          {(voiceConfig.pitch ?? 0) > 0 ? `+${voiceConfig.pitch}Hz` : `${voiceConfig.pitch ?? 0}Hz`}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-20"
+                        max="20"
+                        step="1"
+                        value={voiceConfig.pitch ?? 0}
+                        onChange={(e) =>
+                          setVoiceConfig((prev) => ({
+                            ...prev,
+                            pitch: parseInt(e.target.value, 10),
+                          }))
+                        }
+                        className="w-full accent-cyan-400 bg-slate-800 h-1.5 rounded-lg cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>Deep (-20Hz)</span>
+                        <span>Natural (0Hz)</span>
+                        <span>Bright (+20Hz)</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Voice Test Buttons & Status */}
                 <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
                   <div className="flex items-center justify-between">
@@ -2569,7 +2780,7 @@ export function MenuControlCenterWindow({
                       className="px-4 py-2.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-2 transition shadow-sm hover:shadow-cyan-500/20"
                     >
                       <Volume2 size={15} />
-                      <span>Test Tamil Voice ("வணக்கம் ராஜா...")</span>
+                      <span>Test Tamil Voice ("வணக்கம் ராஜா, நான் ஏஞ்சல் ஏஐ...")</span>
                     </button>
                     <button
                       type="button"

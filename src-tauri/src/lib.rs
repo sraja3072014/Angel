@@ -568,6 +568,287 @@ fn export_workshop_stl_files(
     Ok(export_dir.to_string_lossy().to_string())
 }
 
+fn to_base64_string(bytes: &[u8]) -> String {
+    const CHARSET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARSET[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARSET[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARSET[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARSET[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
+fn url_encode_tts_text(input: &str) -> String {
+    let mut encoded = String::new();
+    for b in input.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            encoded.push(b as char);
+        } else if b == b' ' {
+            encoded.push('+');
+        } else {
+            encoded.push_str(&format!("%{:02X}", b));
+        }
+    }
+    encoded
+}
+
+#[tauri::command]
+async fn synthesize_neural_tts(
+    text: String,
+    voice: String,
+    rate_percent: i32,
+    pitch_hz: i32,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let clean_text = text
+            .replace("[ACTION:", "")
+            .replace(']', "")
+            .replace('*', "")
+            .replace('#', "")
+            .replace('_', "")
+            .replace('`', "")
+            .trim()
+            .to_string();
+
+        if clean_text.is_empty() {
+            return Err("Empty text provided for TTS synthesis.".into());
+        }
+
+        let has_tamil = clean_text.chars().any(|c| ('\u{0B80}'..='\u{0BFF}').contains(&c));
+        let selected_voice = if voice.trim().is_empty() {
+            if has_tamil {
+                "ta-IN-PallaviNeural".to_string()
+            } else {
+                "en-IN-NeerjaNeural".to_string()
+            }
+        } else {
+            voice.trim().to_string()
+        };
+
+        let lang_code = if selected_voice.starts_with("ta-") || has_tamil {
+            "ta-IN"
+        } else if selected_voice.starts_with("en-GB") {
+            "en-GB"
+        } else {
+            "en-IN"
+        };
+
+        let rate_str = format!("{:+}%", rate_percent);
+        let pitch_str = format!("{:+2}Hz", pitch_hz);
+
+        // SSML Payload for Microsoft Speech Synthesis
+        let ssml = format!(
+            "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{lang}'>\
+                <voice name='{voice}'>\
+                    <prosody rate='{rate}' pitch='{pitch}'>\
+                        {escaped_text}\
+                    </prosody>\
+                </voice>\
+            </speak>",
+            lang = lang_code,
+            voice = selected_voice,
+            rate = rate_str,
+            pitch = pitch_str,
+            escaped_text = clean_text
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+                .replace('\'', "&apos;")
+        );
+
+        let temp_dir = std::env::temp_dir();
+        let target_mp3 = temp_dir.join(format!(
+            "angel_neural_{}_{}.mp3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+
+        // 1. Edge ReadAloud WebSocket synthesis attempt via PowerShell
+        #[cfg(target_os = "windows")]
+        {
+            let ps_edge = format!(
+                r#"
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+                $unix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                $ticks = [long]($unix + 11644473600)
+                $ticks -= ($ticks % 300)
+                $ticks = $ticks * [long]10000000
+                $token = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
+                $strToHash = "$ticks$token"
+                $hasher = [System.Security.Cryptography.SHA256]::Create()
+                $bytes = [System.Text.Encoding]::ASCII.GetBytes($strToHash)
+                $hashBytes = $hasher.ComputeHash($bytes)
+                $gec = [BitConverter]::ToString($hashBytes).Replace('-', '')
+
+                $ws = New-Object System.Net.WebSockets.ClientWebSocket
+                $ws.Options.SetRequestHeader('Origin', 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold')
+                $url = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=$token&Sec-MS-GEC=$gec&Sec-MS-GEC-Version=1-130.0.2849.68"
+                $uri = [Uri]$url
+                $ct = [Threading.CancellationToken]::None
+                $t = $ws.ConnectAsync($uri, $ct)
+                if ($t.Wait(3000) -and $ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {{
+                    $cfgMsg = "Content-Type:application/json; charset=utf-8`r`nPath:speech.config`r`n`r`n{{""context"":{{""synthesis"":{{""audio"":{{""metadataoptions"":{{""sentenceBoundaryEnabled"":""false"",""wordBoundaryEnabled"":""false""}},""outputFormat"":""audio-24khz-48kbitrate-mono-mp3""}}}}}}}}"
+                    $cfgBytes = [System.Text.Encoding]::UTF8.GetBytes($cfgMsg)
+                    $ws.SendAsync([ArraySegment[byte]]$cfgBytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait(2000)
+
+                    $reqId = [Guid]::NewGuid().ToString("N").ToUpper()
+                    $ssmlContent = @"
+{}
+"@
+                    $ssmlMsg = "X-RequestId:$reqId`r`nContent-Type:application/ssml+xml`r`nPath:ssml`r`n`r`n$ssmlContent"
+                    $ssmlBytes = [System.Text.Encoding]::UTF8.GetBytes($ssmlMsg)
+                    $ws.SendAsync([ArraySegment[byte]]$ssmlBytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait(2000)
+
+                    $ms = New-Object System.IO.MemoryStream
+                    $buf = New-Object byte[] 8192
+                    $turnEnd = $false
+                    while (-not $turnEnd -and $ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {{
+                        $res = $ws.ReceiveAsync([ArraySegment[byte]]$buf, $ct)
+                        if (-not $res.Wait(5000)) {{ break }}
+                        $count = $res.Result.Count
+                        if ($count -gt 2) {{
+                            if ($res.Result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Binary) {{
+                                $headerLen = ($buf[0] -shl 8) -bor $buf[1]
+                                if ($count -gt (2 + $headerLen)) {{
+                                    $audioOffset = 2 + $headerLen
+                                    $audioLen = $count - $audioOffset
+                                    $ms.Write($buf, $audioOffset, $audioLen)
+                                }}
+                            }} elseif ($res.Result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Text) {{
+                                $txt = [System.Text.Encoding]::UTF8.GetString($buf, 0, $count)
+                                if ($txt -match "Path:turn\.end") {{
+                                    $turnEnd = $true
+                                }}
+                            }}
+                        }}
+                    }}
+                    if ($ms.Length -gt 1024) {{
+                        [System.IO.File]::WriteAllBytes('{}', $ms.ToArray())
+                    }}
+                    $ws.Dispose()
+                }}
+                "#,
+                ssml,
+                target_mp3.to_string_lossy().replace('\'', "''")
+            );
+
+            let mut cmd = Command::new("powershell");
+            cmd.args(["-NoProfile", "-Command", &ps_edge]);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            let _ = cmd.output();
+        }
+
+        // 2. High-Fidelity Neural Fallback via curl.exe (Google Neural Audio stream)
+        // Ensures Tamil and English audio ALWAYS synthesize with crystal clear pronunciation
+        if !target_mp3.exists() || std::fs::metadata(&target_mp3).map(|m| m.len()).unwrap_or(0) < 1000 {
+            let short_lang = if has_tamil || selected_voice.starts_with("ta-") {
+                "ta"
+            } else if selected_voice.starts_with("en-GB") {
+                "en-GB"
+            } else {
+                "en"
+            };
+
+            // Chunk clean_text into segments of <= 180 chars for neural endpoint
+            let words = clean_text.split_whitespace().collect::<Vec<_>>();
+            let mut chunks = Vec::new();
+            let mut current_chunk = String::new();
+            for word in words {
+                if current_chunk.len() + word.len() + 1 > 180 {
+                    if !current_chunk.is_empty() {
+                        chunks.push(current_chunk);
+                        current_chunk = String::new();
+                    }
+                }
+                if !current_chunk.is_empty() {
+                    current_chunk.push(' ');
+                }
+                current_chunk.push_str(word);
+            }
+            if !current_chunk.is_empty() {
+                chunks.push(current_chunk);
+            }
+
+            let mut full_audio_bytes = Vec::new();
+            for chunk in chunks {
+                let encoded_q = url_encode_tts_text(&chunk);
+                let url = format!(
+                    "https://translate.google.com/translate_tts?ie=UTF-8&tl={}&client=tw-ob&q={}",
+                    short_lang, encoded_q
+                );
+
+                let chunk_temp = temp_dir.join(format!(
+                    "angel_chunk_{}_{}.mp3",
+                    std::process::id(),
+                    full_audio_bytes.len()
+                ));
+
+                let mut curl_cmd = Command::new("curl.exe");
+                #[cfg(target_os = "windows")]
+                curl_cmd.creation_flags(CREATE_NO_WINDOW);
+
+                curl_cmd
+                    .arg("-s")
+                    .arg("-S")
+                    .arg("-A")
+                    .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+                    .arg(&url)
+                    .arg("-o")
+                    .arg(&chunk_temp);
+
+                let res = curl_cmd.output();
+                if let Ok(out) = res {
+                    if out.status.success() && chunk_temp.exists() {
+                        if let Ok(bytes) = std::fs::read(&chunk_temp) {
+                            full_audio_bytes.extend_from_slice(&bytes);
+                        }
+                        let _ = std::fs::remove_file(chunk_temp);
+                    }
+                }
+            }
+
+            if !full_audio_bytes.is_empty() {
+                let _ = std::fs::write(&target_mp3, &full_audio_bytes);
+            }
+        }
+
+        if !target_mp3.exists() {
+            return Err("Neural audio synthesis failed to generate audio stream.".into());
+        }
+
+        let audio_bytes = std::fs::read(&target_mp3)
+            .map_err(|e| format!("Failed to read synthesized MP3: {e}"))?;
+        let _ = std::fs::remove_file(target_mp3);
+
+        if audio_bytes.len() < 200 {
+            return Err("Synthesized audio stream was too small or corrupted.".into());
+        }
+
+        let b64 = to_base64_string(&audio_bytes);
+        Ok(format!("data:audio/mp3;base64,{}", b64))
+    })
+    .await
+    .map_err(|e| format!("Async task join error: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -716,6 +997,7 @@ pub fn run() {
             plugin_forge::plugin_forge_match_and_run,
             export_workshop_stl_files,
             send_discord_webhook,
+            synthesize_neural_tts,
             os_doctor::get_system_health_report
         ])
         .run(tauri::generate_context!())
