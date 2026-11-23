@@ -1521,7 +1521,17 @@ export function MenuControlCenterWindow({
 
                     {/* Auto Smart Router Info & Active Routing Chain Card */}
                     {isRouter && (() => {
-                      const priorityOrder = ["gemini", "groq", "deepseek", "openrouter", "ollama", "local_lmstudio", "openai", "anthropic", "github"];
+                      const priorityOrder = [
+                        "gemini",
+                        "openrouter",
+                        "groq",
+                        "deepseek",
+                        "openai",
+                        "anthropic",
+                        "github",
+                        "ollama",
+                        "local_lmstudio",
+                      ];
                       const chainProviders = priorityOrder
                         .map((pid) => providers.find((p) => p.id === pid))
                         .filter((p): p is AIProviderConfig => Boolean(p));

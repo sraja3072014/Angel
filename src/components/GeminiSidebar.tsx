@@ -92,14 +92,18 @@ export function GeminiSidebar({
 
         {/* New Chat Pill Button */}
         <button
-          onClick={onNewChat}
-          title="New chat"
-          className={`flex items-center gap-2.5 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs font-semibold shadow-sm transition ${
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onNewChat();
+          }}
+          title="New chat (Ctrl+N)"
+          className={`relative z-20 cursor-pointer flex items-center gap-2.5 rounded-full bg-white/10 hover:bg-white/15 border border-white/15 text-white text-xs font-semibold shadow-sm transition active:scale-95 ${
             collapsed ? "p-2.5 justify-center" : "px-4 py-2.5 w-full"
           }`}
         >
-          <Plus size={16} className="text-cyan-300" />
-          {!collapsed && <span>New chat</span>}
+          <Plus size={16} className="text-cyan-300 pointer-events-none" />
+          {!collapsed && <span className="pointer-events-none">New chat</span>}
         </button>
 
         {/* Navigation Items */}

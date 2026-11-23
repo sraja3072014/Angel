@@ -382,14 +382,14 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       const all = loadAIProviders();
       const priorityOrder = [
         "gemini",
+        "openrouter",
         "groq",
         "deepseek",
-        "openrouter",
-        "ollama",
-        "local_lmstudio",
         "openai",
         "anthropic",
         "github",
+        "ollama",
+        "local_lmstudio",
       ];
       const configured = priorityOrder
         .map((pid) => all.find((p) => p.id === pid))
@@ -406,20 +406,35 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         };
       }
 
-      // Test highest-priority configured provider in the active chain
-      const primary = configured[0];
-      const res = await testProviderConnection(primary);
-      const latencyMs = Math.round(performance.now() - startTime);
-      if (res.ok) {
+      let readyCount = 0;
+      let firstResponding: { name: string; latencyMs: number } | null = null;
+      const failures: string[] = [];
+
+      for (const p of configured) {
+        const res = await testProviderConnection(p);
+        if (res.ok) {
+          readyCount++;
+          if (!firstResponding) {
+            firstResponding = { name: p.name, latencyMs: res.latencyMs || 0 };
+          }
+        } else {
+          failures.push(`${p.name}: ${res.message}`);
+        }
+      }
+
+      const totalLatency = Math.round(performance.now() - startTime);
+
+      if (firstResponding) {
         return {
           ok: true,
-          message: `Auto Smart Router Ready • Routing via ${primary.name}`,
-          latencyMs: res.latencyMs || latencyMs,
+          message: `Auto Router Active • Connected via ${firstResponding.name} (${readyCount}/${configured.length} providers ready)`,
+          latencyMs: firstResponding.latencyMs || totalLatency,
         };
       } else {
         return {
           ok: false,
-          message: `Auto Router check: ${primary.name} returned (${res.message}). Other ${configured.length - 1} providers in chain.`,
+          message: `All ${configured.length} configured providers failed (${failures.slice(0, 2).join("; ")})`,
+          latencyMs: totalLatency,
         };
       }
     }
@@ -477,32 +492,58 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           ? "gemini-3.8-flash"
           : rawTarget;
 
-      try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${encodeURIComponent(trimmedKey)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: "ping" }] }],
-            }),
-          }
-        );
-        const latencyMs = Math.round(performance.now() - startTime);
-        if (res.ok) {
-          return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
-        }
-        const err = await res.json().catch(() => ({}));
-        return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
-      } catch {
-        const ai = new GoogleGenAI({ apiKey: trimmedKey });
-        await ai.models.generateContent({
-          model: targetModel,
-          contents: "Respond with 'ok'",
-        });
-        const latencyMs = Math.round(performance.now() - startTime);
-        return { ok: true, message: `Connected • ${latencyMs}ms`, latencyMs };
+      const modelsToTry = [targetModel];
+      if (targetModel !== "gemini-3.8-flash-lite") {
+        modelsToTry.push("gemini-3.8-flash-lite");
       }
+
+      let lastErrMessage = "";
+      for (const modelName of modelsToTry) {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(trimmedKey)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: "ping" }] }],
+              }),
+            }
+          );
+          const latencyMs = Math.round(performance.now() - startTime);
+          if (res.ok) {
+            return {
+              ok: true,
+              message: modelName === targetModel ? `Connected • ${latencyMs}ms` : `Connected (${modelName} fallback) • ${latencyMs}ms`,
+              latencyMs,
+            };
+          }
+          const err = await res.json().catch(() => ({}));
+          lastErrMessage = err?.error?.message || `HTTP ${res.status}`;
+          if (res.status === 503 || res.status === 429 || lastErrMessage.toLowerCase().includes("high demand")) {
+            console.warn(`Gemini model ${modelName} busy/high demand. Cascading to fallback model...`);
+            continue;
+          }
+        } catch {
+          try {
+            const ai = new GoogleGenAI({ apiKey: trimmedKey });
+            await ai.models.generateContent({
+              model: modelName,
+              contents: "Respond with 'ok'",
+            });
+            const latencyMs = Math.round(performance.now() - startTime);
+            return {
+              ok: true,
+              message: modelName === targetModel ? `Connected • ${latencyMs}ms` : `Connected (${modelName} fallback) • ${latencyMs}ms`,
+              latencyMs,
+            };
+          } catch (e: any) {
+            lastErrMessage = e?.message || "SDK error";
+            continue;
+          }
+        }
+      }
+      return { ok: false, message: lastErrMessage || "Gemini connection failed" };
     }
 
     if (provider.id === "anthropic") {
@@ -1055,11 +1096,9 @@ Never use destructive commands (rm, del, format).`;
           }
         } catch (e: any) {
           const msg = e?.message || "";
-          if (msg.includes("429") || msg.includes("Quota") || msg.includes("rate")) {
-            console.warn(`Gemini key rate-limited, rotating to next key...`);
-            break; // Try next key
-          }
-          continue; // Try next model in ladder
+          console.warn(`Gemini model ${model} error (${msg}). Cascading to next model...`);
+          // Automatically try next model in ladder ("gemini-3.8-flash-lite")
+          continue;
         }
       }
     }
@@ -1291,24 +1330,55 @@ Never use destructive commands (rm, del, format).`;
     }
 
     // Build execution list
+    // True cascade chain: Google Gemini -> FreeLLMAPI (127.0.0.1:31415) -> Groq -> DeepSeek -> OpenAI -> Claude -> GitHub Copilot -> Ollama (localhost:11434) -> Local LLM
+    const priorityOrder = [
+      "gemini",
+      "openrouter",
+      "groq",
+      "deepseek",
+      "openai",
+      "anthropic",
+      "github",
+      "ollama",
+      "local_lmstudio",
+    ];
+
+    const isConfigured = (p: AIProviderConfig) => {
+      if (!p.enabled) return false;
+      if (p.id === "ollama" || p.id === "local_lmstudio") {
+        return Boolean(p.endpoint && p.endpoint.trim());
+      }
+      return extractKeysList(p.apiKey).length > 0;
+    };
+
     const executionList: AIProviderConfig[] = [];
     if (targetProvider.id === "auto") {
-      const priorityOrder = ["gemini", "groq", "deepseek", "openrouter", "ollama", "local_lmstudio", "openai", "anthropic", "github"];
       for (const pid of priorityOrder) {
-        const found = providers.find((p) => p.id === pid && p.enabled);
-        if (found) executionList.push(found);
+        const found = providers.find((p) => p.id === pid);
+        if (found && isConfigured(found)) {
+          executionList.push(found);
+        }
       }
     } else {
       executionList.push(targetProvider);
       if (autoFailover) {
-        for (const p of providers) {
-          if (p.id !== targetProvider.id && p.id !== "auto" && p.enabled) {
-            executionList.push(p);
+        for (const pid of priorityOrder) {
+          if (pid !== targetProvider.id) {
+            const found = providers.find((p) => p.id === pid);
+            if (found && isConfigured(found)) {
+              executionList.push(found);
+            }
           }
         }
       }
     }
 
+    if (executionList.length === 0) {
+      const anyEnabled = providers.filter((p) => p.id !== "auto" && p.enabled);
+      executionList.push(...anyEnabled);
+    }
+
+    const isAutoRouting = targetProvider.id === "auto" || autoFailover;
     let lastError: any = null;
     for (const provider of executionList) {
       try {
@@ -1344,8 +1414,8 @@ Never use destructive commands (rm, del, format).`;
         }
       } catch (err: any) {
         lastError = err;
-        console.warn(`Provider ${provider.name} failed:`, err?.message || err);
-        if (!autoFailover) break;
+        console.warn(`Provider ${provider.name} failed (${err?.message || err}). Cascading to next provider...`);
+        if (!isAutoRouting) break;
       }
     }
 

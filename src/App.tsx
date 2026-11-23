@@ -366,14 +366,52 @@ export default function App() {
     }
   };
 
-  // Clear / New Chat
+  // Clear / New Chat & Session Reset
   const handleNewChat = () => {
+    // 1. Save current non-empty conversation into localStorage if not already saved
+    if (messages.length > 0) {
+      const existingSession = currentSessionId ? sessions.find((s) => s.id === currentSessionId) : null;
+      if (!existingSession) {
+        const firstUserMsg = messages.find((m) => m.role === "user");
+        const titleText = firstUserMsg?.text || "Conversation";
+        const title = titleText.trim().slice(0, 36) + (titleText.length > 36 ? "..." : "");
+        const newSessionId = currentSessionId || `session_${Date.now()}`;
+        const newSession: ChatSession = {
+          id: newSessionId,
+          title,
+          timestamp: "Just now",
+          messages: [...messages],
+        };
+        const updated = [newSession, ...sessions.filter((s) => s.id !== newSessionId)];
+        saveSessions(updated);
+      } else {
+        const updated = sessions.map((s) =>
+          s.id === currentSessionId ? { ...s, messages: [...messages] } : s
+        );
+        saveSessions(updated);
+      }
+    }
+
+    // 2. Immediately reset state so clean "Where should we start?" screen appears
     setMessages([]);
     setCurrentSessionId(null);
     setInput("");
     setIsProcessing(false);
     setMicErrorMessage(null);
+    setActiveModal(null);
   };
+
+  // Global Shortcut: Ctrl+N or Cmd+N for Instant New Chat
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        handleNewChat();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [messages, currentSessionId, sessions]);
 
   const handleSelectSession = (session: ChatSession) => {
     setCurrentSessionId(session.id);
