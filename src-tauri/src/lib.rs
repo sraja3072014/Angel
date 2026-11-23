@@ -403,6 +403,69 @@ fn open_security_suite(app: tauri::AppHandle, initial_tab: Option<String>) -> Re
     Ok(())
 }
 
+#[tauri::command]
+async fn proxy_local_llm_request(
+    url: String,
+    api_key: Option<String>,
+    payload: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let is_post = !payload.trim().is_empty();
+        let mut cmd = Command::new("curl.exe");
+
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        cmd.arg("-s").arg("-S");
+        cmd.arg("-X").arg(if is_post { "POST" } else { "GET" });
+        cmd.arg(&url);
+
+        if is_post {
+            cmd.arg("-H").arg("Content-Type: application/json");
+        }
+
+        if let Some(ref key) = api_key {
+            let trimmed = key.trim();
+            if !trimmed.is_empty() {
+                cmd.arg("-H").arg(format!("Authorization: Bearer {}", trimmed));
+            }
+        }
+
+        if is_post {
+            cmd.arg("--data-binary").arg("@-");
+            cmd.stdin(std::process::Stdio::piped());
+        }
+
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn curl: {e}"))?;
+
+        if is_post {
+            use std::io::Write;
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(payload.as_bytes());
+            }
+        }
+
+        let output = child.wait_with_output().map_err(|e| format!("Request failed: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        if !output.status.success() && stdout.trim().is_empty() {
+            return Err(if !stderr.trim().is_empty() {
+                stderr
+            } else {
+                format!("Curl exited with status: {}", output.status)
+            });
+        }
+
+        Ok(stdout)
+    })
+    .await
+    .map_err(|e| format!("Task execution error: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -498,6 +561,7 @@ pub fn run() {
             open_security_suite,
             open_menu_window,
             set_auto_start,
+            proxy_local_llm_request,
             voice_bridge::offline_speech_to_text,
             voice_bridge::speak_offline_tts,
             os_automation::control_system_volume,

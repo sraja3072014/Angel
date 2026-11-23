@@ -347,6 +347,24 @@ export function saveAIProviders(providers: AIProviderConfig[]) {
   } catch {}
 }
 
+export function isLocalEndpoint(url: string): boolean {
+  return url.includes("127.0.0.1") || url.includes("localhost") || url.includes("0.0.0.0");
+}
+
+export async function proxyLocalRequest(url: string, apiKey?: string, payload?: any): Promise<any> {
+  const payloadStr = payload ? (typeof payload === "string" ? payload : JSON.stringify(payload)) : "";
+  const raw = await invoke<string>("proxy_local_llm_request", {
+    url,
+    apiKey: apiKey || null,
+    payload: payloadStr,
+  });
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
 export async function testProviderConnection(provider: AIProviderConfig): Promise<{
   ok: boolean;
   message: string;
@@ -355,13 +373,58 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
 }> {
   const startTime = performance.now();
   try {
-    if (provider.id === "ollama") {
-      const baseUrl = provider.endpoint.replace(/\/$/, "");
-      const res = await fetch(`${baseUrl}/api/tags`);
+    if (provider.id === "auto") {
+      const all = loadAIProviders();
+      const priorityOrder = [
+        "gemini",
+        "groq",
+        "deepseek",
+        "openrouter",
+        "ollama",
+        "local_lmstudio",
+        "openai",
+        "anthropic",
+        "github",
+      ];
+      const configured = priorityOrder
+        .map((pid) => all.find((p) => p.id === pid))
+        .filter((p): p is AIProviderConfig => {
+          if (!p || !p.enabled) return false;
+          if (p.id === "ollama" || p.id === "local_lmstudio") return Boolean(p.endpoint && p.endpoint.trim());
+          return extractKeysList(p.apiKey).length > 0;
+        });
+
+      if (configured.length === 0) {
+        return {
+          ok: false,
+          message: "No AI providers configured yet. Configure at least one provider (Gemini, FreeLLMAPI, Ollama, etc.) below.",
+        };
+      }
+
+      // Test highest-priority configured provider in the active chain
+      const primary = configured[0];
+      const res = await testProviderConnection(primary);
       const latencyMs = Math.round(performance.now() - startTime);
       if (res.ok) {
-        const data = await res.json();
-        const models = (data.models || []).map((m: any) => m.name || m.model);
+        return {
+          ok: true,
+          message: `Auto Smart Router Ready • Routing via ${primary.name}`,
+          latencyMs: res.latencyMs || latencyMs,
+        };
+      } else {
+        return {
+          ok: false,
+          message: `Auto Router check: ${primary.name} returned (${res.message}). Other ${configured.length - 1} providers in chain.`,
+        };
+      }
+    }
+
+    if (provider.id === "ollama") {
+      const baseUrl = provider.endpoint.replace(/\/$/, "");
+      try {
+        const data = await proxyLocalRequest(`${baseUrl}/api/tags`);
+        const latencyMs = Math.round(performance.now() - startTime);
+        const models = (data?.models || []).map((m: any) => m.name || m.model);
         return {
           ok: true,
           message:
@@ -371,18 +434,18 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           latencyMs,
           models,
         };
+      } catch (err: any) {
+        return { ok: false, message: `Ollama error: ${err?.message || err}` };
       }
-      return { ok: false, message: `Ollama error HTTP ${res.status}` };
     }
 
     if (provider.id === "local_lmstudio") {
       let baseUrl = provider.endpoint.replace(/\/chat\/completions$/, "").replace(/\/$/, "");
       if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
-      const res = await fetch(`${baseUrl}/models`);
-      const latencyMs = Math.round(performance.now() - startTime);
-      if (res.ok) {
-        const data = await res.json();
-        const models = (data.data || []).map((m: any) => m.id);
+      try {
+        const data = await proxyLocalRequest(`${baseUrl}/models`);
+        const latencyMs = Math.round(performance.now() - startTime);
+        const models = (data?.data || []).map((m: any) => m.id);
         return {
           ok: true,
           message:
@@ -392,8 +455,9 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           latencyMs,
           models,
         };
+      } catch (err: any) {
+        return { ok: false, message: `LM Studio error: ${err?.message || err}` };
       }
-      return { ok: false, message: `LM Studio error HTTP ${res.status}` };
     }
 
     const keyList = extractKeysList(provider.apiKey);
@@ -445,57 +509,53 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         };
       }
 
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${activeKey.trim()}`,
-      };
-
-      // 1. Try querying /v1/models on FreeLLMAPI Unified Router gateway
-      let routerModels: string[] = [];
       let baseUrl = provider.endpoint.replace(/\/chat\/completions$/, "").replace(/\/$/, "");
       if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
 
+      let routerModels: string[] = [];
       try {
-        const modelsRes = await fetch(`${baseUrl}/models`, { headers });
-        if (modelsRes.ok) {
-          const mData = await modelsRes.json();
-          routerModels = (mData.data || mData.models || [])
-            .map((m: any) => m.id || m.name || m.model)
-            .filter(Boolean);
-        }
+        const mData = await proxyLocalRequest(`${baseUrl}/models`, activeKey.trim());
+        routerModels = (mData?.data || mData?.models || [])
+          .map((m: any) => m.id || m.name || m.model)
+          .filter(Boolean);
       } catch {}
 
-      // 2. Perform chat completions ping test
       let chatUrl = provider.endpoint;
       if (!chatUrl.includes("/chat/completions")) {
         chatUrl = `${baseUrl}/chat/completions`;
       }
 
-      const res = await fetch(chatUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      try {
+        const pingBody = {
           model: provider.defaultModel || (routerModels[0] || "meta-llama/llama-3.3-70b-instruct:free"),
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 5,
-        }),
-      });
-
-      const latencyMs = Math.round(performance.now() - startTime);
-      if (res.ok) {
+        };
+        const data = await proxyLocalRequest(chatUrl, activeKey.trim(), pingBody);
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (data?.choices || data?.id || data?.message) {
+          return {
+            ok: true,
+            message:
+              routerModels.length > 0
+                ? `Connected • ${latencyMs}ms (${routerModels.length} router models)`
+                : `Connected • ${latencyMs}ms`,
+            latencyMs,
+            models: routerModels.length > 0 ? routerModels : undefined,
+          };
+        }
+        if (data?.error?.message) {
+          return { ok: false, message: data.error.message };
+        }
         return {
           ok: true,
-          message:
-            routerModels.length > 0
-              ? `Connected • ${latencyMs}ms (${routerModels.length} router models)`
-              : `Connected • ${latencyMs}ms`,
+          message: `Connected • ${latencyMs}ms`,
           latencyMs,
           models: routerModels.length > 0 ? routerModels : undefined,
         };
+      } catch (err: any) {
+        return { ok: false, message: `Gateway error: ${err?.message || err}` };
       }
-
-      const err = await res.json().catch(() => ({}));
-      return { ok: false, message: err?.error?.message || err?.message || `HTTP ${res.status}` };
     }
 
     if (!activeKey && provider.id !== "local_lmstudio") {
@@ -1005,8 +1065,35 @@ Never use destructive commands (rm, del, format).`;
     let lastErrorMsg = "";
 
     for (const key of candidateKeys) {
-      if (!key && provider.id !== "local_lmstudio") {
+      if (!key && provider.id !== "local_lmstudio" && !isLocalEndpoint(targetUrl)) {
         continue;
+      }
+
+      // If local endpoint (FreeLLMAPI 127.0.0.1:31415, LM Studio, etc.), route via Rust proxy to bypass WebView2 CORS
+      if (isLocalEndpoint(targetUrl) || provider.id === "openrouter" || provider.id === "local_lmstudio") {
+        try {
+          const postBody = {
+            model: provider.defaultModel,
+            messages: [
+              { role: "system", content: systemInstruction },
+              { role: "user", content: prompt },
+            ],
+            temperature,
+          };
+          const data = await proxyLocalRequest(targetUrl, key ? key.trim() : undefined, postBody);
+          if (data?.error?.message) {
+            lastErrorMsg = data.error.message;
+            continue;
+          }
+          const reply = data?.choices?.[0]?.message?.content || "";
+          if (reply) {
+            options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
+            return reply;
+          }
+        } catch (err: any) {
+          lastErrorMsg = err?.message || String(err);
+          continue;
+        }
       }
 
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -1110,28 +1197,24 @@ Never use destructive commands (rm, del, format).`;
     options?: GeminiAskOptions
   ): Promise<string> {
     const baseUrl = provider.endpoint.replace(/\/$/, "");
-    const res = await fetch(`${baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: provider.defaultModel || "llama3.2:latest",
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: prompt },
-        ],
-        options: { temperature },
-        stream: false,
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error(`Ollama local server returned HTTP ${res.status}`);
+    const url = `${baseUrl}/api/chat`;
+    const postBody = {
+      model: provider.defaultModel || "llama3.2:latest",
+      messages: [
+        { role: "system", content: systemInstruction },
+        { role: "user", content: prompt },
+      ],
+      options: { temperature },
+      stream: false,
+    };
+    try {
+      const data = await proxyLocalRequest(url, undefined, postBody);
+      const reply = data?.message?.content || "";
+      options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
+      return reply;
+    } catch (e: any) {
+      throw new Error(`Ollama local error: ${e?.message || e}`);
     }
-
-    const data = await res.json();
-    const reply = data.message?.content || "";
-    options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
-    return reply;
   }
 
   public async askGemini(userPrompt: string, options?: GeminiAskOptions): Promise<string> {

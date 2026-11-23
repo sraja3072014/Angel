@@ -1012,34 +1012,34 @@ export function MenuControlCenterWindow({
         {/* Custom Glass Titlebar */}
         <div
           data-tauri-drag-region
-          className="h-11 px-4 bg-slate-900/90 border-b border-cyan-400/30 flex items-center justify-between shrink-0 select-none"
+          className="flex items-center justify-between gap-3 px-4 py-3 w-full overflow-hidden bg-slate-900/90 border-b border-cyan-400/30 shrink-0 select-none"
         >
-          <div className="flex items-center gap-3">
-            <div className="p-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/40 text-cyan-300">
+          <div className="min-w-0 flex-1 flex items-center gap-3 truncate">
+            <div className="p-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 shrink-0">
               <Sliders size={15} className="text-cyan-400 animate-pulse" />
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-black tracking-widest text-cyan-200">
+            <div className="flex items-center gap-2 truncate">
+              <span className="text-xs font-black tracking-widest text-cyan-200 shrink-0">
                 ANGEL AI
               </span>
-              <span className="text-xs font-semibold text-slate-400">
+              <span className="text-xs font-semibold text-slate-400 truncate">
                 • Master Control Center
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono text-cyan-300/80 mr-2 flex items-center gap-1.5">
+          <div className="shrink-0 flex items-center gap-2">
+            <span className="text-[11px] font-mono text-cyan-300/80 mr-1 sm:mr-2 flex items-center gap-1.5 shrink-0">
               <Clock size={12} className="text-cyan-400" />
               <span>{clock}</span>
             </span>
             <button
               onClick={handleClose}
-              title="Back"
-              className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-rose-600/80 border border-cyan-400/40 text-cyan-200 hover:text-white text-xs font-bold flex items-center gap-1.5 transition"
+              title="Back to Angel AI"
+              className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-rose-600/80 border border-cyan-400/40 text-cyan-200 hover:text-white text-xs font-bold flex items-center gap-1.5 transition shrink-0 shadow-md"
             >
               <X size={14} />
-              <span>Back</span>
+              <span>Back to Angel AI</span>
             </button>
           </div>
         </div>
@@ -1285,6 +1285,16 @@ export function MenuControlCenterWindow({
               const testRes = testResults[activeProvider.id];
               const isTesting = testingId === activeProvider.id;
 
+              const isProviderConfigured = (p: AIProviderConfig): boolean => {
+                if (p.id === "auto") {
+                  return providers.some((other) => other.id !== "auto" && isProviderConfigured(other));
+                }
+                if (p.id === "ollama" || p.id === "local_lmstudio") {
+                  return Boolean(p.endpoint && p.endpoint.trim().length > 0);
+                }
+                return extractKeysList(p.apiKey).length > 0;
+              };
+
               // Key list for multiline auto-rotator
               const keyList = (activeProvider.apiKey || "")
                 .split("\n")
@@ -1333,8 +1343,14 @@ export function MenuControlCenterWindow({
                               {p.id === "local_lmstudio" && <Server size={16} className="text-sky-400" />}
                             </div>
                             <div className="space-y-0.5 pr-2">
-                              <div className="font-bold text-white text-xs flex items-center gap-1.5">
+                              <div className="font-bold text-white text-xs flex items-center gap-1.5 flex-wrap">
                                 <span>{p.name}</span>
+                                {isProviderConfigured(p) && (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 flex items-center gap-1 shadow-sm">
+                                    <span>Configured</span>
+                                    <Check size={10} strokeWidth={3} />
+                                  </span>
+                                )}
                               </div>
                               <div className="text-[11px] text-slate-400 leading-snug line-clamp-2">
                                 {p.description}
@@ -1384,6 +1400,12 @@ export function MenuControlCenterWindow({
                         {isLocal && (
                           <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-950 border border-emerald-400/40 text-emerald-300">
                             ⚡ LOCAL ENDPOINT
+                          </span>
+                        )}
+                        {isRouter && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center gap-1">
+                            <Zap size={11} className="text-amber-400" />
+                            <span>DYNAMIC CHAIN</span>
                           </span>
                         )}
                       </div>
@@ -1497,18 +1519,61 @@ export function MenuControlCenterWindow({
                       </div>
                     )}
 
-                    {/* Auto Smart Router Info */}
-                    {isRouter && (
-                      <div className="p-3 rounded-xl bg-black/40 border border-cyan-400/20 text-xs text-slate-300 space-y-1">
-                        <div className="font-semibold text-cyan-200 flex items-center gap-1.5">
-                          <Zap size={13} className="text-cyan-400" />
-                          <span>Smart Failover Priority Active</span>
+                    {/* Auto Smart Router Info & Active Routing Chain Card */}
+                    {isRouter && (() => {
+                      const priorityOrder = ["gemini", "groq", "deepseek", "openrouter", "ollama", "local_lmstudio", "openai", "anthropic", "github"];
+                      const chainProviders = priorityOrder
+                        .map((pid) => providers.find((p) => p.id === pid))
+                        .filter((p): p is AIProviderConfig => Boolean(p));
+                      const readyCount = chainProviders.filter(isProviderConfigured).length;
+
+                      return (
+                        <div className="p-4 rounded-2xl bg-cyan-950/20 border border-cyan-400/30 text-xs text-slate-300 space-y-3 shadow-inner">
+                          <div className="flex items-center justify-between">
+                            <div className="font-bold text-cyan-200 flex items-center gap-2">
+                              <Zap size={15} className="text-amber-400" />
+                              <span className="tracking-wide">ACTIVE ROUTING CHAIN</span>
+                            </div>
+                            <span className="text-[11px] font-mono text-cyan-300 font-bold bg-cyan-950 px-2.5 py-0.5 rounded-full border border-cyan-400/40">
+                              {readyCount} of {chainProviders.length} Configured
+                            </span>
+                          </div>
+
+                          <p className="text-[11px] text-slate-400 leading-relaxed">
+                            No separate API key required. Auto Smart Router dynamically tests latency and dispatches queries across all your configured providers, automatically dodging 429 rate limits.
+                          </p>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 pt-1">
+                            {chainProviders.map((cp, idx) => {
+                              const ready = isProviderConfigured(cp);
+                              return (
+                                <div
+                                  key={cp.id}
+                                  className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs font-mono transition ${
+                                    ready
+                                      ? "bg-emerald-950/40 border-emerald-500/50 text-emerald-200 shadow-sm"
+                                      : "bg-slate-900/30 border-white/5 text-slate-500"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 truncate">
+                                    <span className="text-[10px] opacity-60">#{idx + 1}</span>
+                                    <span className="truncate font-semibold text-slate-200">{cp.name}</span>
+                                  </div>
+                                  {ready ? (
+                                    <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold shrink-0">
+                                      <Check size={11} strokeWidth={3} />
+                                      <span>Ready</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] text-slate-500 shrink-0">No key</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <div className="text-[11px] text-slate-400">
-                          Routes prompts dynamically through Gemini &rarr; Groq &rarr; DeepSeek &rarr; OpenRouter &rarr; Ollama &rarr; Local LM Studio based on availability, latency, and configured API keys.
-                        </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Model Dropdown & Test Connection Row */}
                     <div className="pt-2 space-y-2 border-t border-white/10">
@@ -1516,20 +1581,27 @@ export function MenuControlCenterWindow({
                         <label className="text-xs font-semibold text-slate-200 mb-1 block">
                           Model
                         </label>
-                        <select
-                          value={activeProvider.defaultModel}
-                          onChange={(e) => handleChangeProviderModel(activeProvider.id, e.target.value)}
-                          className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-400 transition"
-                        >
-                          {(activeProvider.availableModels && activeProvider.availableModels.length > 0
-                            ? activeProvider.availableModels
-                            : [activeProvider.defaultModel]
-                          ).map((m) => (
-                            <option key={m} value={m} className="bg-slate-900 text-white">
-                              {m}
-                            </option>
-                          ))}
-                        </select>
+                        {isRouter ? (
+                          <div className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-cyan-300 flex items-center justify-between">
+                            <span>Dynamic Priority Routing (Auto Failover across configured brains)</span>
+                            <span className="text-[10px] text-emerald-400 font-bold">Automatic</span>
+                          </div>
+                        ) : (
+                          <select
+                            value={activeProvider.defaultModel}
+                            onChange={(e) => handleChangeProviderModel(activeProvider.id, e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-slate-100 focus:outline-none focus:border-cyan-400 transition"
+                          >
+                            {(activeProvider.availableModels && activeProvider.availableModels.length > 0
+                              ? activeProvider.availableModels
+                              : [activeProvider.defaultModel]
+                            ).map((m) => (
+                              <option key={m} value={m} className="bg-slate-900 text-white">
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </div>
 
                       {/* Test Connection Button & Latency Feedback */}
