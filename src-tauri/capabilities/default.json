@@ -2,7 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for all windows",
-  "windows": ["main", "menu-center", "security-suite"],
+  "windows": [
+    "main",
+    "menu-center",
+    "security-suite"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -12,11 +16,5 @@
     "core:window:allow-show",
     "core:window:allow-set-focus",
     "core:webview:allow-create-webview-window"
-  ],
-  "remote": {
-    "urls": [
-      "http://127.0.0.1:31415/**",
-      "http://localhost:*/**"
-    ]
-  }
+  ]
 }
