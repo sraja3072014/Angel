@@ -130,6 +130,93 @@
       0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.5; transform: scale(0.85); }
     }
+
+    /* Vertical Throttle Gauge HUD */
+    #throttle-hud {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 44px;
+      height: 220px;
+      background: rgba(3, 7, 18, 0.85);
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8), 0 0 15px rgba(6, 182, 212, 0.15);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px 4px;
+      z-index: 25;
+      transition: opacity 0.3s ease;
+      cursor: pointer;
+    }
+    #throttle-hud.hidden {
+      display: none;
+    }
+    .hud-title {
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      color: #06b6d4;
+      text-transform: uppercase;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      margin-bottom: 8px;
+    }
+    .hud-track {
+      flex: 1;
+      width: 10px;
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    .hud-fill {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 0%;
+      background: linear-gradient(to top, #06b6d4 0%, #38bdf8 60%, #ef4444 100%);
+      border-radius: 6px;
+      box-shadow: 0 0 10px rgba(6, 182, 212, 0.6);
+      transition: height 0.08s ease-out;
+    }
+    .hud-pct {
+      font-size: 9px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+
+    /* Gesture status pill on stage */
+    #gesture-pill {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      background: rgba(3, 7, 18, 0.85);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #6ee7b7;
+      z-index: 25;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    #gesture-pill.visible {
+      opacity: 1;
+    }
   </style>
 
   <script type="importmap">
@@ -146,6 +233,22 @@
     <canvas id="stage-canvas"></canvas>
     <svg id="labels-svg"></svg>
     <div id="labels-container"></div>
+
+    <!-- Vertical Throttle Gauge -->
+    <div id="throttle-hud" class="hidden" title="Click or Drag to set Throttle">
+      <div class="hud-pct" id="throttle-val">0%</div>
+      <div class="hud-track">
+        <div class="hud-fill" id="throttle-fill"></div>
+      </div>
+      <div class="hud-title" id="throttle-label">POWER</div>
+    </div>
+
+    <!-- Gesture Status Pill -->
+    <div id="gesture-pill">
+      <span style="color:#10b981;">✦</span>
+      <span id="gesture-text">TRACKING ACTIVE</span>
+    </div>
+
     <div id="stage-badge">
       <div class="dot"></div>
       <span id="badge-text">ANGEL 3D WORKSHOP • 60 FPS</span>
@@ -163,6 +266,12 @@
     const svgEl = document.getElementById('labels-svg');
     const labelsContainer = document.getElementById('labels-container');
     const badgeText = document.getElementById('badge-text');
+    const throttleHud = document.getElementById('throttle-hud');
+    const throttleFill = document.getElementById('throttle-fill');
+    const throttleVal = document.getElementById('throttle-val');
+    const throttleLabel = document.getElementById('throttle-label');
+    const gesturePill = document.getElementById('gesture-pill');
+    const gestureText = document.getElementById('gesture-text');
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -186,7 +295,7 @@
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = 1.8;
-    controls.maxDistance = 14.0;
+    controls.maxDistance = 16.0;
     controls.maxPolarAngle = Math.PI * 0.52; // Keep camera above floor
     controls.target.set(0, 0.3, 0);
 
@@ -263,11 +372,122 @@
     ringMesh.position.y = -1.13;
     scene.add(ringMesh);
 
-    // Base floor original Y for sinking
     const baseFloorY = -1.2;
 
     // ========================================================
-    // 3. THE "W" BUILDER KIT API
+    // 3. PROCEDURAL WEB AUDIO SYNTHESIZER
+    // ========================================================
+    const Synth = {
+      ctx: null,
+      noiseNode: null,
+      noiseFilter: null,
+      oscRumble: null,
+      oscWhine: null,
+      masterGain: null,
+      isMuted: false,
+      isInitialized: false,
+
+      init() {
+        if (this.isInitialized) return;
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (!AudioCtx) return;
+          this.ctx = new AudioCtx();
+
+          // 1. Procedural Noise Buffer (Pink/White blend)
+          const bufferSize = this.ctx.sampleRate * 2;
+          const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+          const output = noiseBuffer.getChannelData(0);
+          let b0 = 0, b1 = 0, b2 = 0;
+          for (let i = 0; i < bufferSize; i++) {
+            const white = Math.random() * 2 - 1;
+            b0 = 0.99886 * b0 + white * 0.0555179;
+            b1 = 0.99332 * b1 + white * 0.0750759;
+            b2 = 0.96900 * b2 + white * 0.1538520;
+            output[i] = (b0 + b1 + b2 + white * 0.5362) * 0.12;
+          }
+
+          this.noiseNode = this.ctx.createBufferSource();
+          this.noiseNode.buffer = noiseBuffer;
+          this.noiseNode.loop = true;
+
+          // Bandpass/Lowpass filter for airflow resonance
+          this.noiseFilter = this.ctx.createBiquadFilter();
+          this.noiseFilter.type = 'lowpass';
+          this.noiseFilter.frequency.value = 240;
+          this.noiseFilter.Q.value = 3.5;
+          this.noiseNode.connect(this.noiseFilter);
+
+          // 2. Dual Oscillators: Low Sub-Rumble + High Turbine Whine
+          this.oscRumble = this.ctx.createOscillator();
+          this.oscRumble.type = 'sawtooth';
+          this.oscRumble.frequency.value = 55;
+
+          const rumbleGain = this.ctx.createGain();
+          rumbleGain.gain.value = 0.15;
+          this.oscRumble.connect(rumbleGain);
+
+          this.oscWhine = this.ctx.createOscillator();
+          this.oscWhine.type = 'sine';
+          this.oscWhine.frequency.value = 680;
+
+          const whineGain = this.ctx.createGain();
+          whineGain.gain.value = 0.08;
+          this.oscWhine.connect(whineGain);
+
+          // 3. Master Gain
+          this.masterGain = this.ctx.createGain();
+          this.masterGain.gain.value = 0.0; // Start silent
+
+          this.noiseFilter.connect(this.masterGain);
+          rumbleGain.connect(this.masterGain);
+          whineGain.connect(this.masterGain);
+          this.masterGain.connect(this.ctx.destination);
+
+          this.noiseNode.start();
+          this.oscRumble.start();
+          this.oscWhine.start();
+          this.isInitialized = true;
+        } catch (e) {
+          console.warn('AudioContext init error:', e);
+        }
+      },
+
+      setSpool(spool) {
+        if (!this.isInitialized || !this.ctx || this.isMuted) return;
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+        const s = Math.max(0, Math.min(1, spool));
+        const now = this.ctx.currentTime;
+        
+        // Modulate filter cutoff (120Hz at idle to 4200Hz at full thrust)
+        const cutoff = 120 + Math.pow(s, 1.8) * 3800;
+        this.noiseFilter.frequency.setTargetAtTime(cutoff, now, 0.08);
+
+        // Modulate rumble (45Hz to 160Hz)
+        const rumbleFreq = 45 + s * 115;
+        this.oscRumble.frequency.setTargetAtTime(rumbleFreq, now, 0.08);
+
+        // Modulate high turbine whine (500Hz to 2800Hz)
+        const whineFreq = 500 + Math.pow(s, 1.5) * 2300;
+        this.oscWhine.frequency.setTargetAtTime(whineFreq, now, 0.08);
+
+        // Modulate master volume
+        const targetGain = s < 0.02 ? 0.0 : (0.05 + s * 0.35);
+        this.masterGain.gain.setTargetAtTime(targetGain, now, 0.06);
+      },
+
+      setMute(muted) {
+        this.isMuted = muted;
+        if (this.masterGain && this.ctx) {
+          this.masterGain.gain.setTargetAtTime(muted ? 0.0 : 0.15, this.ctx.currentTime, 0.05);
+        }
+      }
+    };
+
+    // ========================================================
+    // 4. THE COMPLETE "W" BUILDER KIT API (PHASES 1, 2, 3)
     // ========================================================
     const W = {
       parts: [],
@@ -275,6 +495,22 @@
       explodeProgress: 0,
       thermalMode: false,
       currentProject: 'Angel_3D_Project',
+
+      // Physics Throttle Engine
+      throttleState: {
+        active: false,
+        target: 0.0,
+        current: 0.0,
+        spool: 0.0,
+        label: 'POWER',
+        hasSound: true,
+      },
+
+      // Airflow Particle System
+      airflowGroup: null,
+      airflowParticles: [],
+      airflowActive: false,
+
       telemetry: {
         cpu_percent: 22,
         ram_percent: 45,
@@ -352,6 +588,7 @@
             child.castShadow = true;
             child.receiveShadow = true;
             child.userData.partId = id;
+            child.userData.partName = name;
           }
         });
 
@@ -359,7 +596,6 @@
         let anchor = new THREE.Vector3();
         const bbox = new THREE.Box3().setFromObject(obj);
         bbox.getCenter(anchor);
-        // Offset anchor toward outer perimeter for cleaner leader lines
         if (anchor.lengthSq() < 0.001) {
           anchor.set(bbox.max.x * 0.85, (bbox.max.y + bbox.min.y) * 0.5, bbox.max.z * 0.85);
         }
@@ -397,6 +633,205 @@
         this.tickCallbacks.push(fn);
       },
 
+      // --- THROTTLE ENGINE ---
+      throttle(opts = {}) {
+        this.throttleState.active = true;
+        this.throttleState.label = opts.label || 'POWER';
+        this.throttleState.target = opts.start !== undefined ? opts.start : 0.25;
+        this.throttleState.spool = this.throttleState.target;
+        this.throttleState.hasSound = opts.sound !== false;
+
+        throttleLabel.textContent = this.throttleState.label;
+        throttleHud.classList.remove('hidden');
+
+        if (this.throttleState.hasSound) {
+          Synth.init();
+          Synth.setSpool(this.throttleState.spool);
+        }
+        return this.throttleState;
+      },
+
+      setThrottle(val) {
+        const v = Math.max(0, Math.min(1, val));
+        this.throttleState.target = v;
+      },
+
+      // --- AIRFLOW PARTICLE STREAKS ---
+      airflow(opts = {}) {
+        if (this.airflowGroup) {
+          scene.remove(this.airflowGroup);
+          this.airflowGroup = null;
+          this.airflowParticles = [];
+        }
+
+        const count = opts.count || 240;
+        const radius = opts.radius || 1.35;
+        const length = opts.length || 5.0;
+        const color = opts.color || 0x38bdf8;
+
+        const group = new THREE.Group();
+        const streakGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.45, 6);
+        const streakMat = new THREE.MeshBasicMaterial({
+          color: color,
+          transparent: true,
+          opacity: 0.65,
+        });
+
+        for (let i = 0; i < count; i++) {
+          const mesh = new THREE.Mesh(streakGeo, streakMat);
+          const angle = Math.random() * Math.PI * 2;
+          const r = Math.sqrt(Math.random()) * radius;
+          mesh.position.set(Math.cos(angle) * r, Math.sin(angle) * r, (Math.random() - 0.5) * length);
+          mesh.rotation.x = Math.PI / 2;
+          group.add(mesh);
+
+          this.airflowParticles.push({
+            mesh,
+            baseSpeed: 2.5 + Math.random() * 2.0,
+            angle,
+            r,
+            halfLength: length * 0.5,
+          });
+        }
+
+        this.airflowGroup = group;
+        this.airflowActive = true;
+        scene.add(group);
+        return group;
+      },
+
+      setAirflow(enabled) {
+        this.airflowActive = enabled;
+        if (this.airflowGroup) {
+          this.airflowGroup.visible = enabled;
+        }
+      },
+
+      // --- ARCHITECTURAL PROCEDURAL FLOORPLAN BENCH ---
+      floorplan(plan = {}) {
+        const rooms = plan.rooms || [
+          { name: 'Living Room', x: -1.5, z: 0, w: 3.2, d: 3.4, floor: 'wood' },
+          { name: 'Master Suite', x: 2.0, z: -0.6, w: 2.8, d: 2.6, floor: 'carpet' },
+          { name: 'Kitchen & Dining', x: 1.8, z: 1.5, w: 2.4, d: 2.0, floor: 'tile' },
+        ];
+        const wallH = plan.wallHeight || 1.6;
+        const wallThick = plan.wallThick || 0.12;
+
+        const wallMat = new THREE.MeshStandardMaterial({
+          color: 0x1e293b,
+          metalness: 0.15,
+          roughness: 0.6,
+        });
+
+        const g = new THREE.Group();
+
+        // Build room floors and perimeter walls
+        for (const rm of rooms) {
+          // Room floor
+          let flColor = 0x27272a;
+          if (rm.floor === 'wood') flColor = 0x3f2e21;
+          else if (rm.floor === 'tile') flColor = 0x182635;
+
+          const fGeo = new THREE.BoxGeometry(rm.w, 0.04, rm.d);
+          const fMat = new THREE.MeshStandardMaterial({ color: flColor, roughness: 0.4, metalness: 0.2 });
+          const fMesh = new THREE.Mesh(fGeo, fMat);
+          fMesh.position.set(rm.x, -1.14, rm.z);
+          fMesh.receiveShadow = true;
+          g.add(fMesh);
+
+          // Room perimeter boundary walls
+          const halfW = rm.w * 0.5;
+          const halfD = rm.d * 0.5;
+
+          const wallConfigs = [
+            { w: rm.w, d: wallThick, x: rm.x, z: rm.z - halfD },
+            { w: rm.w, d: wallThick, x: rm.x, z: rm.z + halfD },
+            { w: wallThick, d: rm.d, x: rm.x - halfW, z: rm.z },
+            { w: wallThick, d: rm.d, x: rm.x + halfW, z: rm.z },
+          ];
+
+          for (const wc of wallConfigs) {
+            const wGeo = new THREE.BoxGeometry(wc.w, wallH, wc.d);
+            const wMesh = new THREE.Mesh(wGeo, wallMat);
+            wMesh.position.set(wc.x, -1.14 + wallH * 0.5, wc.z);
+            wMesh.castShadow = true;
+            wMesh.receiveShadow = true;
+            g.add(wMesh);
+          }
+        }
+
+        this.add(g, {
+          name: plan.title || 'Architectural Floor Plan',
+          label: 'Room Structure & Walls',
+          explode: [0, 0.8, 0],
+          description: 'Procedurally generated multi-room architecture with dynamic wall thickness and floor textures.',
+        });
+
+        return g;
+      },
+
+      furniture(kind, opts = {}) {
+        const g = new THREE.Group();
+        const x = opts.x || 0;
+        const y = (opts.y !== undefined ? opts.y : -1.12);
+        const z = opts.z || 0;
+        const rotY = opts.rotY || 0;
+
+        if (kind === 'desk') {
+          const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 0.6), this.metal('black'));
+          top.position.y = 0.5;
+          g.add(top);
+          const legGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.5, 8);
+          for (const lx of [-0.55, 0.55]) {
+            for (const lz of [-0.25, 0.25]) {
+              const leg = new THREE.Mesh(legGeo, this.metal('titanium'));
+              leg.position.set(lx, 0.25, lz);
+              g.add(leg);
+            }
+          }
+        } else if (kind === 'chair') {
+          const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.04, 0.4), this.plastic(0x0284c7));
+          seat.position.y = 0.32;
+          const back = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.35, 0.04), this.plastic(0x0284c7));
+          back.position.set(0, 0.5, -0.18);
+          g.add(seat, back);
+          const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.3, 8), this.metal('steel'));
+          stem.position.y = 0.15;
+          g.add(stem);
+        } else if (kind === 'sofa') {
+          const base = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.3, 0.6), this.plastic(0x334155));
+          base.position.y = 0.18;
+          const back = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.45, 0.2), this.plastic(0x475569));
+          back.position.set(0, 0.48, -0.22);
+          g.add(base, back);
+        } else if (kind === 'bed') {
+          const frame = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.25, 1.8), this.metal('black'));
+          frame.position.y = 0.14;
+          const mat = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.2, 1.7), this.plastic(0xe2e8f0));
+          mat.position.y = 0.32;
+          g.add(frame, mat);
+        } else {
+          // Generic coffee/accent table
+          const tbl = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.04, 24), this.glass());
+          tbl.position.y = 0.32;
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.12, 0.32, 12), this.metal('brass'));
+          leg.position.y = 0.16;
+          g.add(tbl, leg);
+        }
+
+        g.position.set(x, y, z);
+        g.rotation.y = rotY;
+
+        this.add(g, {
+          name: opts.name || `Interior ${kind.charAt(0).toUpperCase() + kind.slice(1)}`,
+          label: `${kind.toUpperCase()} UNIT`,
+          explode: [0, 0.6, 0],
+          description: `Procedural 3D architectural ${kind} asset positioned inside layout.`,
+        });
+
+        return g;
+      },
+
       setExplode(val) {
         this.explodeProgress = Math.max(0, Math.min(1, val));
         let lowestY = 0;
@@ -420,7 +855,6 @@
 
       applyThermalTint() {
         const temp = this.telemetry.cpu_temp_c || 40;
-        // Thermal gradient: <40C Cyan (0x06b6d4), 40-70C Amber (0xf59e0b), >70C Red/Orange (0xef4444)
         let thermalColor = new THREE.Color(0x06b6d4);
         let emissiveIntensity = 0.2;
 
@@ -468,13 +902,21 @@
         this.tickCallbacks = [];
         this.explodeProgress = 0;
         this.setExplode(0);
+
+        if (this.airflowGroup) {
+          scene.remove(this.airflowGroup);
+          this.airflowGroup = null;
+          this.airflowParticles = [];
+        }
+
+        this.throttleState.active = false;
+        throttleHud.classList.add('hidden');
+
         labelsContainer.innerHTML = '';
         svgEl.innerHTML = '';
       },
 
-      // ========================================================
-      // 4. ASCII STL EXPORTER FOR 3D PRINTING
-      // ========================================================
+      // --- STL 3D PRINT EXPORTER ---
       exportSTL() {
         const files = [];
         const normal = new THREE.Vector3();
@@ -498,7 +940,6 @@
               vB.fromBufferAttribute(pos, b).applyMatrix4(matrix);
               vC.fromBufferAttribute(pos, c).applyMatrix4(matrix);
 
-              // Calculate face normal
               const cb = new THREE.Vector3().subVectors(vC, vB);
               const ab = new THREE.Vector3().subVectors(vA, vB);
               normal.crossVectors(cb, ab).normalize();
@@ -542,525 +983,640 @@
       },
     };
 
+    // Throttle click/drag interaction on HUD
+    let isDraggingThrottle = false;
+    const updateThrottleFromHUD = (clientY) => {
+      const rect = throttleHud.getBoundingClientRect();
+      const pct = 1.0 - Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+      W.setThrottle(pct);
+    };
+
+    throttleHud.addEventListener('mousedown', (e) => {
+      isDraggingThrottle = true;
+      updateThrottleFromHUD(e.clientY);
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (isDraggingThrottle) updateThrottleFromHUD(e.clientY);
+    });
+    window.addEventListener('mouseup', () => {
+      isDraggingThrottle = false;
+    });
+
     // ========================================================
-    // 5. SHOWPIECE BUILDERS
+    // 5. MEDIAPIPE 3D GLASS HAND SKELETON & GESTURES
+    // ========================================================
+    const HandRig = {
+      group: new THREE.Group(),
+      hands: [],
+      raycaster: new THREE.Raycaster(),
+      mouseVec: new THREE.Vector2(),
+      draggedPart: null,
+      tetherLine: null,
+      lastPinchTime: 0,
+      tetherGeo: null,
+
+      init() {
+        scene.add(this.group);
+
+        // Tether line for Pinch & Drag
+        const lineMat = new THREE.LineBasicMaterial({
+          color: 0x06b6d4,
+          transparent: true,
+          opacity: 0.85,
+          linewidth: 2,
+        });
+        this.tetherGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(),
+          new THREE.Vector3(),
+        ]);
+        this.tetherLine = new THREE.Line(this.tetherGeo, lineMat);
+        this.tetherLine.visible = false;
+        scene.add(this.tetherLine);
+
+        // Build 2 hand skeletons (21 joint spheres + bone links each)
+        for (let h = 0; h < 2; h++) {
+          const jointMeshes = [];
+          const boneMat = new THREE.MeshPhysicalMaterial({
+            color: h === 0 ? 0x06b6d4 : 0x10b981,
+            transparent: true,
+            opacity: 0.65,
+            roughness: 0.1,
+            metalness: 0.2,
+          });
+
+          for (let j = 0; j < 21; j++) {
+            const sphere = new THREE.Mesh(
+              new THREE.SphereGeometry(j === 4 || j === 8 ? 0.038 : 0.024, 12, 12),
+              boneMat
+            );
+            sphere.visible = false;
+            this.group.add(sphere);
+            jointMeshes.push(sphere);
+          }
+
+          this.hands.push({
+            active: false,
+            joints: jointMeshes,
+          });
+        }
+      },
+
+      updateData(handData) {
+        if (!handData || !handData.landmarks || handData.landmarks.length === 0) {
+          // Hide hands if no data
+          for (const h of this.hands) {
+            h.active = false;
+            for (const j of h.joints) j.visible = false;
+          }
+          if (this.tetherLine) this.tetherLine.visible = false;
+          gesturePill.classList.remove('visible');
+          return;
+        }
+
+        gesturePill.classList.add('visible');
+        if (handData.gestures && handData.gestures.length > 0) {
+          gestureText.textContent = handData.gestures.join(' • ').toUpperCase();
+        } else {
+          gestureText.textContent = 'HAND TRACKING ACTIVE';
+        }
+
+        // Process each detected hand
+        handData.landmarks.forEach((landmarks, hIdx) => {
+          if (hIdx >= this.hands.length) return;
+          const rigHand = this.hands[hIdx];
+          rigHand.active = true;
+
+          // Convert normalized camera coords [0, 1] to 3D Stage coords
+          landmarks.forEach((lm, jIdx) => {
+            const sphere = rigHand.joints[jIdx];
+            sphere.visible = true;
+            // Map: X is inverted for mirror webcam; Y flipped; Z depth
+            const x3d = (0.5 - lm.x) * 3.8;
+            const y3d = (0.5 - lm.y) * 2.8 + 0.6;
+            const z3d = -lm.z * 3.0 + 2.2;
+            sphere.position.set(x3d, y3d, z3d);
+          });
+
+          // Check Pinch Gesture: thumb tip (4) & index tip (8)
+          const thumbTip = rigHand.joints[4].position;
+          const indexTip = rigHand.joints[8].position;
+          const pinchDist = thumbTip.distanceTo(indexTip);
+          const isPinching = pinchDist < 0.12;
+
+          // Raycast from index finger into stage
+          const ndcX = -(indexTip.x / 2.0);
+          const ndcY = indexTip.y / 2.0;
+          this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+          const intersects = this.raycaster.intersectObjects(
+            W.parts.map((p) => p.group),
+            true
+          );
+
+          if (intersects.length > 0) {
+            let hitPart = null;
+            let cur = intersects[0].object;
+            while (cur && !hitPart) {
+              hitPart = W.parts.find((p) => p.group === cur || p.group.children.includes(cur));
+              cur = cur.parent;
+            }
+
+            if (hitPart) {
+              window.parent.postMessage(
+                { type: 'PART_HOVERED', partName: hitPart.name, description: hitPart.description },
+                '*'
+              );
+
+              // Pinch to drag / tether part
+              if (isPinching && !this.draggedPart) {
+                this.draggedPart = hitPart;
+                const now = performance.now();
+                if (now - this.lastPinchTime < 380) {
+                  // Double Pinch Event!
+                  window.parent.postMessage(
+                    { type: 'DOUBLE_PINCH_SPOKEN', partName: hitPart.name, description: hitPart.description },
+                    '*'
+                  );
+                }
+                this.lastPinchTime = now;
+              }
+            }
+          }
+
+          if (isPinching && this.draggedPart) {
+            // Drag part toward index tip
+            this.draggedPart.group.position.lerp(
+              new THREE.Vector3(indexTip.x * 0.7, indexTip.y * 0.7, indexTip.z * 0.7),
+              0.15
+            );
+            // Draw tether line
+            this.tetherLine.visible = true;
+            const posAttr = this.tetherLine.geometry.attributes.position;
+            posAttr.setXYZ(0, indexTip.x, indexTip.y, indexTip.z);
+            posAttr.setXYZ(1, this.draggedPart.group.position.x, this.draggedPart.group.position.y, this.draggedPart.group.position.z);
+            posAttr.needsUpdate = true;
+          } else {
+            if (this.draggedPart) {
+              // Snap back smoothly
+              this.draggedPart.group.position.copy(this.draggedPart.origPos);
+              this.draggedPart = null;
+            }
+            if (this.tetherLine) this.tetherLine.visible = false;
+          }
+        });
+
+        // Two-Hand Pinch & Spread to explode
+        if (handData.landmarks.length >= 2) {
+          const p1 = this.hands[0].joints[8].position;
+          const p2 = this.hands[1].joints[8].position;
+          const dist = p1.distanceTo(p2);
+          // Map distance ~0.4m -> 1.8m to explode 0.0 -> 1.0
+          const exp = Math.max(0, Math.min(1, (dist - 0.5) / 1.1));
+          W.setExplode(exp);
+        }
+
+        // Fist gesture: boost throttle
+        if (handData.gestures && handData.gestures.includes('Fist')) {
+          W.setThrottle(1.0);
+        }
+
+        // Peace sign: reset explode
+        if (handData.gestures && handData.gestures.includes('Peace')) {
+          W.setExplode(0);
+        }
+      },
+    };
+    HandRig.init();
+
+    // ========================================================
+    // 6. IMAGE / FLOOR PLAN HOLOGRAM-TO-SOLID BENCH
+    // ========================================================
+    const ImageBench = {
+      plane: null,
+      scanline: null,
+
+      loadReference(dataUrl) {
+        if (this.plane) scene.remove(this.plane);
+        if (this.scanline) scene.remove(this.scanline);
+
+        const loader = new THREE.TextureLoader();
+        loader.load(dataUrl, (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          const geo = new THREE.PlaneGeometry(3.6, 2.7);
+          const mat = new THREE.MeshBasicMaterial({
+            map: tex,
+            transparent: true,
+            opacity: 0.75,
+            side: THREE.DoubleSide,
+          });
+
+          this.plane = new THREE.Mesh(geo, mat);
+          this.plane.position.set(0, 0.4, -0.6);
+          scene.add(this.plane);
+
+          // Sci-Fi Scanline laser sweep
+          const scanGeo = new THREE.BoxGeometry(3.7, 0.03, 0.02);
+          const scanMat = new THREE.MeshBasicMaterial({ color: 0x06b6d4 });
+          this.scanline = new THREE.Mesh(scanGeo, scanMat);
+          this.scanline.position.set(0, 1.7, -0.58);
+          scene.add(this.scanline);
+
+          let startY = 1.7;
+          let scanTimer = performance.now();
+          const sweep = () => {
+            const elapsed = (performance.now() - scanTimer) / 1000;
+            if (elapsed < 2.5) {
+              const y = startY - (elapsed / 2.5) * 2.7;
+              if (this.scanline) this.scanline.position.y = y;
+              requestAnimationFrame(sweep);
+            } else {
+              // Fade scanline
+              if (this.scanline) scene.remove(this.scanline);
+              if (this.plane) {
+                // Dim down reference as solid models take over
+                this.plane.material.opacity = 0.35;
+              }
+            }
+          };
+          requestAnimationFrame(sweep);
+        });
+      },
+    };
+
+    // ========================================================
+    // 7. SHOWPIECE BUILDERS (TURBOFAN JET ENGINE & GAMING PC)
     // ========================================================
 
-    // --------------------------------------------------------
     // BUILD 1: TWO-SPOOL TURBOFAN JET ENGINE
-    // --------------------------------------------------------
     function buildTurbofanJetEngine() {
       W.clear();
-      W.currentProject = 'Turbofan_Jet_Engine';
-      camera.position.set(0, 2.2, 5.8);
-      controls.target.set(0, 0, 0);
+      W.currentProject = 'Turbofan_Jet_Engine_HighBypass';
 
-      // 1. Maintenance Stand Cradle
-      const standGroup = new THREE.Group();
-      const cradleMat = W.materials.anodizedBlack;
-      const baseLeg1 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.18), cradleMat);
-      baseLeg1.position.set(0, -1.1, 0.9);
-      const baseLeg2 = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.18), cradleMat);
-      baseLeg2.position.set(0, -1.1, -0.9);
-      const crossBeam1 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 1.8), cradleMat);
-      crossBeam1.position.set(-1.6, -1.1, 0);
-      const crossBeam2 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.12, 1.8), cradleMat);
-      crossBeam2.position.set(1.6, -1.1, 0);
-      const strutL = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.9, 16), W.materials.titanium);
-      strutL.position.set(-1.2, -0.65, 0.6);
-      strutL.rotation.z = 0.25;
-      const strutR = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.9, 16), W.materials.titanium);
-      strutR.position.set(1.2, -0.65, 0.6);
-      strutR.rotation.z = -0.25;
-      standGroup.add(baseLeg1, baseLeg2, crossBeam1, crossBeam2, strutL, strutR);
-      W.add(standGroup, {
-        name: 'Maintenance Cradle Stand',
-        label: 'Support Truss',
-        explode: [0, -1.6, 0],
-        description: 'Heavy structural steel cradle holding engine trunnion mounts during overhaul.',
-      });
+      // Register Throttle with sound!
+      W.throttle({ label: 'ENGINE THRUST', start: 0.25, sound: true });
 
-      // 2. Concentric Low/High-Pressure Shafts
-      const shaftsGroup = new THREE.Group();
-      const lpShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.8, 24), W.metal('titanium'));
-      lpShaft.rotation.x = Math.PI / 2;
-      const hpShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 1.8, 24), W.metal('brushedSteel'));
-      hpShaft.rotation.x = Math.PI / 2;
-      hpShaft.position.z = -0.2;
-      shaftsGroup.add(lpShaft, hpShaft);
-      W.add(shaftsGroup, {
-        name: 'Concentric Drive Shafts',
-        label: 'Dual Co-Axial Spools',
-        explode: [0, -0.8, -0.5],
-        description: 'Inner N1 shaft spins the fan via LPT; outer N2 hollow shaft drives the HP compressor.',
-      });
+      // Register Airflow particle streaks
+      W.airflow({ count: 260, radius: 1.35, length: 5.4, color: 0x38bdf8 });
 
-      // 3. 20-Blade Twisted Wide-Chord Fan & Spiral Spinner
+      const rotators = [];
+
+      // PART 1: Titanium Fan Rotor & Hub Spinner
       const fanGroup = new THREE.Group();
-      const hubGeo = new THREE.CylinderGeometry(0.35, 0.42, 0.32, 32);
-      const hub = new THREE.Mesh(hubGeo, W.metal('titanium'));
-      hub.rotation.x = Math.PI / 2;
-      fanGroup.add(hub);
+      const spinnerGeo = new THREE.ConeGeometry(0.35, 0.85, 32);
+      const spinnerMesh = new THREE.Mesh(spinnerGeo, W.metal('titanium'));
+      spinnerMesh.rotation.x = Math.PI / 2;
+      spinnerMesh.position.z = 1.3;
+      fanGroup.add(spinnerMesh);
 
-      // Aerodynamic cone with spiral painted stripe
-      const spinnerGeo = new THREE.ConeGeometry(0.35, 0.65, 32);
-      const spinner = new THREE.Mesh(spinnerGeo, W.metal('black'));
-      spinner.rotation.x = -Math.PI / 2;
-      spinner.position.z = 0.48;
-      fanGroup.add(spinner);
-
-      // 20 Wide-chord twisted titanium blades
-      const bladeGeo = new THREE.BoxGeometry(0.07, 0.72, 0.12);
-      bladeGeo.translate(0, 0.48, 0);
-      for (let i = 0; i < 20; i++) {
+      const bladeCount = 22;
+      const bladeGeo = new THREE.BoxGeometry(0.12, 0.88, 0.028);
+      for (let i = 0; i < bladeCount; i++) {
+        const angle = (i / bladeCount) * Math.PI * 2;
         const blade = new THREE.Mesh(bladeGeo, W.metal('titanium'));
-        const angle = (i / 20) * Math.PI * 2;
-        blade.rotation.z = angle;
-        blade.rotation.y = 0.38; // Pitch angle
+        blade.position.set(Math.cos(angle) * 0.65, Math.sin(angle) * 0.65, 0.95);
+        blade.rotation.z = angle + 0.35;
+        blade.rotation.y = 0.28;
         fanGroup.add(blade);
       }
-      fanGroup.position.z = 1.35;
       W.add(fanGroup, {
-        name: 'Wide-Chord Titanium Fan',
-        label: '20-Blade N1 Rotor',
-        explode: [0, 0, 2.6],
-        description: 'Hollow titanium fan producing over 80% of total bypass thrust with spiral anti-bird spinner.',
+        name: 'Wide-Chord Fan Rotor',
+        label: 'FAN BLADES & SPINNER',
+        explode: [0, 0, 1.8],
+        description: 'Single-piece titanium alloy blisk delivering 85% of total high-bypass forward thrust.',
       });
+      rotators.push({ group: fanGroup, speedMul: 2.8 });
 
-      // 4. Low-Pressure Booster Compressor
-      const boosterGroup = new THREE.Group();
-      for (let s = 0; s < 3; s++) {
-        const disk = new THREE.Mesh(new THREE.CylinderGeometry(0.48 - s * 0.04, 0.5 - s * 0.04, 0.12, 32), W.metal('brushedSteel'));
-        disk.rotation.x = Math.PI / 2;
-        disk.position.z = 0.95 - s * 0.18;
-        boosterGroup.add(disk);
+      // PART 2: Low-Pressure & High-Pressure Compressor Stages
+      const compGroup = new THREE.Group();
+      const compSpool = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.52, 1.1, 32), W.metal('steel'));
+      compSpool.rotation.x = Math.PI / 2;
+      compSpool.position.z = 0.35;
+      compGroup.add(compSpool);
+
+      const compBladesCount = 36;
+      const cBladeGeo = new THREE.BoxGeometry(0.06, 0.35, 0.02);
+      for (let i = 0; i < compBladesCount; i++) {
+        const a = (i / compBladesCount) * Math.PI * 2;
+        const b = new THREE.Mesh(cBladeGeo, W.metal('steel'));
+        b.position.set(Math.cos(a) * 0.52, Math.sin(a) * 0.52, 0.35);
+        b.rotation.z = a + 0.45;
+        compGroup.add(b);
       }
-      W.add(boosterGroup, {
-        name: 'LP Booster Compressor',
-        label: '3-Stage Booster',
-        explode: [0, 0, 1.6],
-        description: 'Supercharges core inlet air directly behind the fan before entering the HP drum.',
+      W.add(compGroup, {
+        name: 'Axial Compressor Assembly',
+        label: 'COMPRESSOR STAGES',
+        explode: [0, 1.3, 0.4],
+        description: 'Multi-stage axial core compressing inlet air to over 40:1 pressure ratio prior to combustion.',
       });
+      rotators.push({ group: compGroup, speedMul: 4.5 });
 
-      // 5. High-Pressure Compressor Drum (9-Stage)
-      const hpcGroup = new THREE.Group();
-      for (let i = 0; i < 7; i++) {
-        const r = 0.42 - i * 0.03;
-        const disk = new THREE.Mesh(new THREE.CylinderGeometry(r, r + 0.015, 0.1, 32), W.metal('titanium'));
-        disk.rotation.x = Math.PI / 2;
-        disk.position.z = 0.35 - i * 0.13;
-        hpcGroup.add(disk);
+      // PART 3: Annular Combustion Chamber
+      const combGroup = new THREE.Group();
+      const combRing = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.16, 16, 48), W.materials.combustionGlow);
+      combRing.position.z = -0.35;
+      combGroup.add(combRing);
+
+      const fuelNozzleGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.18, 12);
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        const nozzle = new THREE.Mesh(fuelNozzleGeo, W.metal('brass'));
+        nozzle.position.set(Math.cos(a) * 0.65, Math.sin(a) * 0.65, -0.35);
+        nozzle.rotation.z = a;
+        combGroup.add(nozzle);
       }
-      W.add(hpcGroup, {
-        name: 'HP Compressor Drum',
-        label: 'High-Pressure Spool',
-        explode: [0, 0, 0.6],
-        description: 'Compresses air to over 40:1 pressure ratio before entering the annular combustor.',
+      W.add(combGroup, {
+        name: 'Annular Combustor Chamber',
+        label: 'COMBUSTION MODULE',
+        explode: [0, -1.2, 0],
+        description: 'High-temperature nickel-alloy combustor mixing atomized Jet-A1 fuel at 1,700°C turbine entry temperatures.',
       });
 
-      // 6. Annular Combustion Chamber
-      const combustorGroup = new THREE.Group();
-      const combustorGeo = new THREE.CylinderGeometry(0.44, 0.44, 0.45, 32, 1, true);
-      const combustor = new THREE.Mesh(combustorGeo, W.materials.combustionGlow);
-      combustor.rotation.x = Math.PI / 2;
-      combustor.position.z = -0.55;
-      // 12 fuel nozzles
-      for (let n = 0; n < 12; n++) {
-        const ang = (n / 12) * Math.PI * 2;
-        const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.15, 8), W.metal('brass'));
-        nozzle.position.set(Math.cos(ang) * 0.48, Math.sin(ang) * 0.48, -0.55);
-        nozzle.rotation.z = ang + Math.PI / 2;
-        combustorGroup.add(nozzle);
+      // PART 4: High-Pressure Turbine Stage
+      const turbGroup = new THREE.Group();
+      const turbDisk = new THREE.Mesh(new THREE.CylinderGeometry(0.48, 0.48, 0.25, 32), W.materials.heatTintTurbine);
+      turbDisk.rotation.x = Math.PI / 2;
+      turbDisk.position.z = -0.85;
+      turbGroup.add(turbDisk);
+
+      const turbBladesCount = 28;
+      const tBladeGeo = new THREE.BoxGeometry(0.07, 0.38, 0.024);
+      for (let i = 0; i < turbBladesCount; i++) {
+        const a = (i / turbBladesCount) * Math.PI * 2;
+        const tb = new THREE.Mesh(tBladeGeo, W.materials.heatTintTurbine);
+        tb.position.set(Math.cos(a) * 0.58, Math.sin(a) * 0.58, -0.85);
+        tb.rotation.z = a - 0.4;
+        turbGroup.add(tb);
       }
-      combustorGroup.add(combustor);
-      W.add(combustorGroup, {
-        name: 'Annular Combustor',
-        label: 'Diffusion Burner',
-        explode: [1.8, 0, -0.4],
-        description: 'Mixes atomized jet fuel with compressed air, generating high-velocity 1700°C combustion gas.',
+      W.add(turbGroup, {
+        name: 'High-Pressure Turbine Blisk',
+        label: 'TURBINE EXTRACTOR',
+        explode: [0, 0, -1.6],
+        description: 'Single-crystal superalloy blades extracting kinetic energy from expanding exhaust gas to drive the front fan spool.',
+      });
+      rotators.push({ group: turbGroup, speedMul: 5.2 });
+
+      // PART 5: Aerodynamic Nacelle Cowling Cutaway
+      const cowlGroup = new THREE.Group();
+      const cowlGeo = new THREE.CylinderGeometry(1.3, 1.15, 2.6, 48, 1, true, 0, Math.PI * 1.35);
+      const cowlMat = new THREE.MeshStandardMaterial({
+        color: 0x0f172a,
+        metalness: 0.85,
+        roughness: 0.2,
+        side: THREE.DoubleSide,
+      });
+      const cowlMesh = new THREE.Mesh(cowlGeo, cowlMat);
+      cowlMesh.rotation.x = Math.PI / 2;
+      cowlMesh.position.z = 0.2;
+      cowlGroup.add(cowlMesh);
+      W.add(cowlGroup, {
+        name: 'Nacelle Aerodynamic Cowling',
+        label: 'NACELLE CUTAWAY',
+        explode: [1.6, 0.4, 0],
+        description: 'Carbon-composite acoustic cowling guiding bypass airflow and isolating engine core thermal zones.',
       });
 
-      // 7. High-Pressure Turbine (HPT)
-      const hptGroup = new THREE.Group();
-      const hptDisk = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.12, 32), W.materials.heatTintTurbine);
-      hptDisk.rotation.x = Math.PI / 2;
-      hptDisk.position.z = -0.85;
-      hptGroup.add(hptDisk);
-      W.add(hptGroup, {
-        name: 'HP Single-Stage Turbine',
-        label: 'Cooled HPT Rotor',
-        explode: [0, 0, -1.2],
-        description: 'Single-crystal nickel superalloy blades extract energy from combustor gas to drive the compressor drum.',
-      });
-
-      // 8. Low-Pressure Turbine (LPT)
-      const lptGroup = new THREE.Group();
-      for (let t = 0; t < 4; t++) {
-        const tr = 0.46 + t * 0.04;
-        const lptDisk = new THREE.Mesh(new THREE.CylinderGeometry(tr, tr, 0.11, 32), W.metal('titanium'));
-        lptDisk.rotation.x = Math.PI / 2;
-        lptDisk.position.z = -1.1 - t * 0.15;
-        lptGroup.add(lptDisk);
-      }
-      W.add(lptGroup, {
-        name: 'LP 4-Stage Turbine',
-        label: 'N1 Drive Turbine',
-        explode: [0, 0, -2.2],
-        description: 'Extracts remaining thermal energy to rotate the front wide-chord fan via the concentric inner shaft.',
-      });
-
-      // 9. Split Nacelle Duct Casings (Upper & Lower)
-      const nacelleUpper = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.05, 0.95, 1.8, 32, 1, true, 0, Math.PI),
-        W.metal('brushedSteel')
-      );
-      nacelleUpper.rotation.x = Math.PI / 2;
-      nacelleUpper.position.set(0, 0, 0.5);
-      W.add(nacelleUpper, {
-        name: 'Upper Nacelle Cowling',
-        label: 'Acoustic Liner (Top)',
-        explode: [0, 2.0, 0.3],
-        description: 'Hinged acoustic casing with noise-suppression honeycomb mesh for airport flyover noise dampening.',
-      });
-
-      const nacelleLower = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.05, 0.95, 1.8, 32, 1, true, Math.PI, Math.PI),
-        W.metal('brushedSteel')
-      );
-      nacelleLower.rotation.x = Math.PI / 2;
-      nacelleLower.position.set(0, 0, 0.5);
-      W.add(nacelleLower, {
-        name: 'Lower Nacelle Cowling',
-        label: 'Acoustic Liner (Bottom)',
-        explode: [0, -1.9, 0.3],
-        description: 'Lower access cowl housing drain valves, starter connections, and inspection access doors.',
-      });
-
-      // 10. Exhaust Nozzle & Tailcone
+      // PART 6: Variable Exhaust Nozzle & Tailcone
       const exhaustGroup = new THREE.Group();
-      const nozzleGeo = new THREE.CylinderGeometry(0.58, 0.42, 0.9, 32, 1, true);
-      const nozzle = new THREE.Mesh(nozzleGeo, W.metal('black'));
-      nozzle.rotation.x = Math.PI / 2;
-      nozzle.position.z = -1.9;
-      const coneGeo = new THREE.ConeGeometry(0.28, 1.1, 32);
-      const tailcone = new THREE.Mesh(coneGeo, W.metal('titanium'));
-      tailcone.rotation.x = -Math.PI / 2;
-      tailcone.position.z = -2.3;
-      exhaustGroup.add(nozzle, tailcone);
+      const coneGeo = new THREE.ConeGeometry(0.38, 1.2, 32);
+      const coneMesh = new THREE.Mesh(coneGeo, W.metal('titanium'));
+      coneMesh.rotation.x = -Math.PI / 2;
+      coneMesh.position.z = -1.6;
+      exhaustGroup.add(coneMesh);
+
+      const nozzleRing = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.68, 0.4, 32, 1, true), W.metal('black'));
+      nozzleRing.rotation.x = Math.PI / 2;
+      nozzleRing.position.z = -1.4;
+      exhaustGroup.add(nozzleRing);
       W.add(exhaustGroup, {
-        name: 'Core Exhaust & Tailcone',
-        label: 'Mixer Nozzle',
-        explode: [0, 0, -3.4],
-        description: 'Accelerates core exhaust stream and optimizes pressure distribution behind the LPT disks.',
+        name: 'Variable Exhaust Nozzle',
+        label: 'EXHAUST CONE',
+        explode: [-1.4, -0.6, -1.0],
+        description: 'Convergent exhaust mixing core jet gas with cooler bypass stream for optimal thermal acoustic attenuation.',
       });
 
-      // Continuous Spool Rotation Tick
+      // Spool & Dynamic Rotation Ticks
       W.onTick((delta) => {
-        if (W.explodeProgress < 0.98) {
-          fanGroup.rotation.z -= delta * 3.5;
-          boosterGroup.rotation.z -= delta * 3.5;
-          lptGroup.rotation.z -= delta * 3.5;
-          hpcGroup.rotation.z -= delta * 7.2; // High-pressure spool rotates faster
-          hptGroup.rotation.z -= delta * 7.2;
+        // Inertial spool physics
+        const spoolSpeed = 1.6;
+        W.throttleState.spool += (W.throttleState.target - W.throttleState.spool) * (delta * spoolSpeed);
+        
+        // Update audio synth
+        if (W.throttleState.hasSound) {
+          Synth.setSpool(W.throttleState.spool);
+        }
+
+        // Update HUD
+        const pct = Math.round(W.throttleState.spool * 100);
+        throttleVal.textContent = `${pct}%`;
+        throttleFill.style.height = `${pct}%`;
+
+        // Rotate spools scaled by throttle spool
+        const rotMultiplier = 0.8 + W.throttleState.spool * 4.5;
+        for (const r of rotators) {
+          r.group.rotation.z += delta * r.speedMul * rotMultiplier;
+        }
+
+        // Airflow streaks animation
+        if (W.airflowActive && W.airflowParticles.length > 0) {
+          const speed = (2.0 + W.throttleState.spool * 12.0) * delta;
+          for (const p of W.airflowParticles) {
+            p.mesh.position.z -= p.baseSpeed * speed;
+            if (p.mesh.position.z < -p.halfLength) {
+              p.mesh.position.z = p.halfLength;
+            }
+          }
         }
       });
     }
 
-    // --------------------------------------------------------
     // BUILD 2: LIVE TELEMETRY GAMING PC DIGITAL TWIN
-    // --------------------------------------------------------
     function buildGamingPCDigitalTwin() {
       W.clear();
       W.currentProject = 'Gaming_PC_Digital_Twin';
-      camera.position.set(0, 1.8, 5.2);
-      controls.target.set(0, 0.1, 0);
 
-      // Create dynamic 2D canvas for CPU Liquid Cooler Pump Head LCD
-      const lcdCanvas = document.createElement('canvas');
-      lcdCanvas.width = 256;
-      lcdCanvas.height = 256;
-      const lcdCtx = lcdCanvas.getContext('2d');
-      const lcdTexture = new THREE.CanvasTexture(lcdCanvas);
+      const fans = [];
 
-      function updateLcdCanvas() {
-        const cpu = Math.round(W.telemetry.cpu_percent || 25);
-        const temp = Math.round(W.telemetry.cpu_temp_c || 42);
-        const ram = Math.round(W.telemetry.ram_percent || 48);
-
-        lcdCtx.fillStyle = '#030712';
-        lcdCtx.fillRect(0, 0, 256, 256);
-
-        // Circular gauge
-        lcdCtx.lineWidth = 14;
-        lcdCtx.strokeStyle = 'rgba(6, 182, 212, 0.2)';
-        lcdCtx.beginPath();
-        lcdCtx.arc(128, 128, 100, 0, Math.PI * 2);
-        lcdCtx.stroke();
-
-        // Progress arc
-        const progress = Math.min(1, Math.max(0, cpu / 100));
-        lcdCtx.strokeStyle = temp > 65 ? '#ef4444' : temp > 48 ? '#f59e0b' : '#06b6d4';
-        lcdCtx.beginPath();
-        lcdCtx.arc(128, 128, 100, -Math.PI / 2, -Math.PI / 2 + progress * Math.PI * 2);
-        lcdCtx.stroke();
-
-        // Temperature readout
-        lcdCtx.fillStyle = '#ffffff';
-        lcdCtx.font = 'bold 58px ui-monospace, sans-serif';
-        lcdCtx.textAlign = 'center';
-        lcdCtx.fillText(`${temp}°C`, 128, 125);
-
-        // Telemetry Sub-labels
-        lcdCtx.fillStyle = '#38bdf8';
-        lcdCtx.font = 'bold 22px sans-serif';
-        lcdCtx.fillText(`CPU ${cpu}%`, 128, 165);
-
-        lcdCtx.fillStyle = '#94a3b8';
-        lcdCtx.font = '16px monospace';
-        lcdCtx.fillText(`RAM ${ram}% • HEALTH ${W.telemetry.health_score || 98}`, 128, 195);
-
-        lcdTexture.needsUpdate = true;
-      }
-      updateLcdCanvas();
-
-      // 1. Dual-Chamber Showcase Chassis & Glass Panels
+      // PART 1: Chassis Frame & Cable Management Backplane
       const chassisGroup = new THREE.Group();
-      const frameMat = W.materials.chassisDark;
-      const cornerPost1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.5, 0.08), frameMat);
-      cornerPost1.position.set(-1.1, 0, -1.0);
-      const cornerPost2 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.5, 0.08), frameMat);
-      cornerPost2.position.set(1.1, 0, -1.0);
-      const topPlate = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.08, 2.1), frameMat);
-      topPlate.position.set(0, 1.25, 0);
-      const btmPlate = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.12, 2.1), frameMat);
-      btmPlate.position.set(0, -1.25, 0);
-      chassisGroup.add(cornerPost1, cornerPost2, topPlate, btmPlate);
+      const chassisMat = W.materials.chassisDark;
+      const frameGeo = new THREE.BoxGeometry(1.6, 2.2, 2.2);
+      const frameWire = new THREE.BoxGeometry(1.62, 2.22, 2.22);
+      const frameMesh = new THREE.Mesh(frameWire, new THREE.MeshBasicMaterial({ color: 0x06b6d4, wireframe: true, transparent: true, opacity: 0.15 }));
+      chassisGroup.add(frameMesh);
 
-      // Tempered Glass Front & Side Panels (lift outwards on explode)
-      const sideGlass = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.4, 1.95), W.materials.glass);
-      sideGlass.position.set(1.12, 0, 0);
-      const frontGlass = new THREE.Mesh(new THREE.BoxGeometry(2.15, 2.4, 0.04), W.materials.glass);
-      frontGlass.position.set(0, 0, 1.02);
-      const glassGroup = new THREE.Group();
-      glassGroup.add(sideGlass, frontGlass);
-
-      W.add(glassGroup, {
-        name: 'Showcase Tempered Glass Panels',
-        label: 'Dual-Chamber Glass',
-        explode: [1.8, 0, 1.8],
-        description: 'Frameless 4mm tinted tempered glass panels providing panoramic view of interior hardware.',
-      });
-
+      const psuShroud = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.45, 2.1), chassisMat);
+      psuShroud.position.set(0, -0.85, 0);
+      chassisGroup.add(psuShroud);
       W.add(chassisGroup, {
-        name: 'Aluminium Showcase Chassis',
-        label: 'O11-Style Frame',
-        explode: [0, -1.4, 0],
-        description: 'Dual-chamber dark anodized aluminium chassis with independent power supply compartment.',
+        name: 'Chassis Chassis Frame',
+        label: 'ALUMINUM CHASSIS',
+        explode: [0, -1.2, 0],
+        description: 'Anodized dual-chamber steel and aluminum unibody with modular mounting channels.',
       });
 
-      // 2. ATX Motherboard & VRM Heatsinks
+      // PART 2: ATX Motherboard & VRM Heat Sinks
       const moboGroup = new THREE.Group();
-      const moboPCB = new THREE.Mesh(new THREE.BoxGeometry(1.65, 1.9, 0.04), W.materials.pcbMatteBlack);
-      moboPCB.position.set(-0.15, 0.1, -0.6);
-      const vrmHeatsink1 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.65, 0.18), W.metal('black'));
-      vrmHeatsink1.position.set(-0.65, 0.5, -0.5);
-      const vrmHeatsink2 = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.22, 0.18), W.metal('black'));
-      vrmHeatsink2.position.set(-0.35, 0.85, -0.5);
-      const ioCover = new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.1, 0.25), W.metal('black'));
-      ioCover.position.set(-0.85, 0.4, -0.5);
-      moboGroup.add(moboPCB, vrmHeatsink1, vrmHeatsink2, ioCover);
+      const moboMesh = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.4, 1.4), W.materials.pcbMatteBlack);
+      moboMesh.position.set(-0.65, 0.15, 0);
+      moboGroup.add(moboMesh);
+
+      const vrmGeo = new THREE.BoxGeometry(0.14, 0.35, 0.28);
+      const vrmMesh = new THREE.Mesh(vrmGeo, W.metal('titanium'));
+      vrmMesh.position.set(-0.55, 0.6, -0.4);
+      moboGroup.add(vrmMesh);
       W.add(moboGroup, {
-        name: 'High-End ATX Motherboard',
-        label: 'Z790 / X870 PCB',
-        explode: [0, 0, -0.8],
-        description: '14-layer server-grade PCB with 24+1 power stages, reinforced PCIe 5.0 slot, and heavy heatsinks.',
+        name: 'ATX Mainboard PCB & VRM',
+        label: 'MOTHERBOARD CORE',
+        explode: [-1.4, 0, 0],
+        description: '14-layer PCIe Gen 5 host mainboard supporting direct processor communication lanes.',
       });
 
-      // 3. CPU Liquid Cooler Pump Head with Live Dynamic LCD
-      const pumpGroup = new THREE.Group();
-      const pumpBody = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.22, 32), W.metal('black'));
-      pumpBody.rotation.x = Math.PI / 2;
-      pumpBody.position.set(-0.35, 0.45, -0.4);
-      const pumpScreenMat = new THREE.MeshBasicMaterial({ map: lcdTexture });
-      const pumpScreen = new THREE.Mesh(new THREE.CircleGeometry(0.32, 32), pumpScreenMat);
-      pumpScreen.position.set(-0.35, 0.45, -0.28);
-      // Dual braided liquid cooling tubes leading to top radiator
-      const tubeCurve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(-0.35, 0.55, -0.38),
-        new THREE.Vector3(-0.35, 0.95, -0.1),
-        new THREE.Vector3(-0.25, 1.1, 0.1),
-      ]);
-      const tubeGeo = new THREE.TubeGeometry(tubeCurve, 20, 0.045, 12, false);
-      const tubeMesh = new THREE.Mesh(tubeGeo, W.metal('black'));
-      pumpGroup.add(pumpBody, pumpScreen, tubeMesh);
-      W.add(pumpGroup, {
-        name: 'AIO Liquid Cooler Pump Head',
-        label: 'Live LCD Digital Readout',
-        explode: [0, 0, 1.8],
-        description: 'Copper micro-skived cold plate with integrated circular IPS display streaming real hardware metrics.',
+      // PART 3: 24-Core Flagship Processor & AIO Liquid Pump Block
+      const cpuGroup = new THREE.Group();
+      const cpuIhs = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.24, 0.24), W.metal('copper'));
+      cpuIhs.position.set(-0.6, 0.35, -0.15);
+      cpuGroup.add(cpuIhs);
+
+      const pumpGeo = new THREE.CylinderGeometry(0.18, 0.18, 0.14, 32);
+      const pumpMesh = new THREE.Mesh(pumpGeo, W.metal('black'));
+      pumpMesh.rotation.z = Math.PI / 2;
+      pumpMesh.position.set(-0.5, 0.35, -0.15);
+      cpuGroup.add(pumpMesh);
+
+      const ringLed = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.16, 32), W.materials.argbLed);
+      ringLed.rotation.y = Math.PI / 2;
+      ringLed.position.set(-0.42, 0.35, -0.15);
+      cpuGroup.add(ringLed);
+      W.add(cpuGroup, {
+        name: 'CPU & AIO Liquid Pump Block',
+        label: 'PROCESSOR WATERBLOCK',
+        explode: [0, 1.2, 0],
+        description: 'Micro-skived copper cold plate coupled with low-cavitation PWM liquid impeller.',
       });
 
-      // 4. Upright Triple-Fan Flagship GPU (RTX 5090 FE style)
+      // PART 4: GPU Graphics Accelerator
       const gpuGroup = new THREE.Group();
-      const gpuBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.58, 0.28), W.metal('titanium'));
-      gpuBody.position.set(0.05, -0.35, -0.1);
-      const gpuBackplate = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.58, 0.03), W.metal('black'));
-      gpuBackplate.position.set(0.05, -0.35, -0.25);
-      gpuGroup.add(gpuBody, gpuBackplate);
+      const gpuShroud = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.55, 1.35), W.metal('titanium'));
+      gpuShroud.position.set(-0.15, 0.05, 0.15);
+      gpuGroup.add(gpuShroud);
 
-      // 3 GPU Spinning Axial Fans
-      const gpuFans = [];
+      const backplate = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.52, 1.3), W.metal('black'));
+      backplate.position.set(-0.34, 0.05, 0.15);
+      gpuGroup.add(backplate);
+
       for (let f = 0; f < 3; f++) {
-        const fanMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.04, 16), W.metal('black'));
-        fanMesh.rotation.x = Math.PI / 2;
-        fanMesh.position.set(-0.48 + f * 0.52, -0.35, 0.06);
+        const fanMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.04, 16), W.metal('black'));
+        fanMesh.rotation.z = Math.PI / 2;
+        fanMesh.position.set(0.04, 0.05, -0.35 + f * 0.42);
         gpuGroup.add(fanMesh);
-        gpuFans.push(fanMesh);
+        fans.push({ mesh: fanMesh, baseSpeed: 8.5 });
       }
       W.add(gpuGroup, {
-        name: 'Triple-Fan Flagship GPU',
-        label: 'RTX 5090 32GB FE',
-        explode: [0, -0.6, 2.2],
-        description: 'Vapor chamber cooled graphics accelerator with dual axial flow-through fans and illuminated logo.',
+        name: 'Flagship GPU Graphics Card',
+        label: 'GRAPHICS ACCELERATOR',
+        explode: [0, 0, 1.5],
+        description: 'Vapor-chamber cooled triple-axial graphics card maintaining high-fps compute throughput.',
       });
 
-      // 5. Dual Channel DDR5 RAM Sticks with Frosted RGB Bars
-      const ramGroup = new THREE.Group();
-      for (let r = 0; r < 2; r++) {
-        const stick = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.42, 0.85), W.metal('black'));
-        stick.position.set(0.18 + r * 0.12, 0.45, -0.5);
-        const rgbBar = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.06, 0.85), W.materials.argbLed);
-        rgbBar.position.set(0.18 + r * 0.12, 0.68, -0.5);
-        ramGroup.add(stick, rgbBar);
+      // PART 5: Front Intake & Top 360mm Radiator Fans
+      const coolingGroup = new THREE.Group();
+      for (let i = 0; i < 3; i++) {
+        const radFan = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 24), W.materials.argbLed);
+        radFan.position.set(-0.4 + i * 0.45, 1.05, 0);
+        coolingGroup.add(radFan);
+        fans.push({ mesh: radFan, baseSpeed: 9.0 });
       }
-      W.add(ramGroup, {
-        name: 'Dual-Channel DDR5 Memory',
-        label: '64GB 6400MHz RGB RAM',
-        explode: [0.8, 0.6, 0.8],
-        description: 'Low-latency gaming RAM modules with forged aluminium heatspreaders and addressable RGB LEDs.',
-      });
-
-      // 6. 360mm Roof Radiator & 3 Illuminated Exhaust Fans
-      const radGroup = new THREE.Group();
-      const radBody = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.14, 0.65), W.metal('black'));
-      radBody.position.set(0, 1.15, 0);
-      radGroup.add(radBody);
-
-      const radFans = [];
-      for (let rf = 0; rf < 3; rf++) {
-        const rFan = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 18), W.materials.argbLed);
-        rFan.position.set(-0.52 + rf * 0.52, 1.05, 0);
-        radGroup.add(rFan);
-        radFans.push(rFan);
-      }
-      W.add(radGroup, {
+      W.add(coolingGroup, {
         name: '360mm Liquid Cooling Radiator',
-        label: 'Triple-Fan Roof Exhaust',
-        explode: [0, 2.2, 0],
-        description: 'High-density micro-fin radiator dissipating CPU heat via triple hydraulic-bearing PWM fans.',
+        label: 'COOLING FANS',
+        explode: [0, 1.5, 0],
+        description: 'High-static-pressure ARGB fan array dissipating thermal energy across aluminum heat fins.',
       });
 
-      // 7. Side & Bottom Intake ARGB Fans (6 fans)
-      const intakeFansGroup = new THREE.Group();
-      const caseFans = [];
-      for (let bf = 0; bf < 3; bf++) {
-        const bFan = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 18), W.materials.argbLed);
-        bFan.position.set(-0.52 + bf * 0.52, -1.15, 0.2);
-        intakeFansGroup.add(bFan);
-        caseFans.push(bFan);
-      }
-      W.add(intakeFansGroup, {
-        name: 'High-Airflow Intake Fans',
-        label: 'Bottom & Side ARGB Arrays',
-        explode: [-1.8, 0, 1.2],
-        description: 'Intake fan array creating positive chassis air pressure and feeding cool ambient air to the GPU.',
+      // PART 6: Tempered Glass Panoramic Window
+      const glassGroup = new THREE.Group();
+      const glassPane = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.1, 2.1), W.glass());
+      glassPane.position.set(0.78, 0, 0);
+      glassGroup.add(glassPane);
+      W.add(glassGroup, {
+        name: 'Panoramic Tempered Glass Panel',
+        label: 'GLASS SHOWCASE',
+        explode: [1.8, 0, 0],
+        description: 'Electro-coated 4mm acoustic tempered glass providing optical showcase clarity.',
       });
 
-      // Continuous Telemetry Tick Animation
-      let lcdTickCount = 0;
+      // Fan Rotation Dynamic Tick
       W.onTick((delta) => {
-        // Spin fans proportionally to CPU load and telemetry fan_rpm
-        const speedMultiplier = ((W.telemetry.fan_rpm || 1000) / 1000) * 12;
-        const rotDelta = delta * speedMultiplier;
-
-        gpuFans.forEach((f) => (f.rotation.z += rotDelta));
-        radFans.forEach((f) => (f.rotation.y += rotDelta));
-        caseFans.forEach((f) => (f.rotation.y -= rotDelta));
-
-        // Update LCD canvas every ~15 frames for buttery efficiency
-        lcdTickCount++;
-        if (lcdTickCount % 12 === 0) {
-          updateLcdCanvas();
+        const rpmFactor = (W.telemetry.fan_rpm || 1100) / 1000;
+        for (const fan of fans) {
+          fan.mesh.rotation.x += delta * fan.baseSpeed * rpmFactor;
         }
       });
     }
 
     // ========================================================
-    // 6. SMART VERTEX-ANCHORED TEARDOWN LABELS
+    // 8. TEARDOWN LABELS & SCREEN POSITION MAPPING
     // ========================================================
+    const tempVec = new THREE.Vector3();
+
     function updateTeardownLabels() {
-      if (W.explodeProgress < 0.42) {
+      if (W.parts.length === 0) {
         labelsContainer.innerHTML = '';
         svgEl.innerHTML = '';
         return;
       }
 
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      const opacity = Math.min(1, (W.explodeProgress - 0.42) / 0.35);
+      const isMobile = window.innerWidth < 640;
+      if (isMobile) {
+        labelsContainer.innerHTML = '';
+        svgEl.innerHTML = '';
+        return;
+      }
 
-      // Partition parts into left and right screen columns
-      const leftParts = [];
-      const rightParts = [];
-
+      const activeParts = [];
       for (const p of W.parts) {
-        // Project anchor to 2D screen space
-        p.group.localToWorld(p.anchorWorld.copy(p.anchorLocal));
-        const proj = p.anchorWorld.clone().project(camera);
+        p.group.updateWorldMatrix(true, false);
+        p.anchorWorld.copy(p.anchorLocal).applyMatrix4(p.group.matrixWorld);
 
-        const screenX = ((proj.x + 1) / 2) * width;
-        const screenY = ((-proj.y + 1) / 2) * height;
-
-        // Skip parts behind camera
-        if (proj.z > 1.0) continue;
-
-        const item = { part: p, screenX, screenY, projZ: proj.z };
-        if (screenX < width * 0.5) {
-          leftParts.push(item);
-        } else {
-          rightParts.push(item);
+        tempVec.copy(p.anchorWorld).project(camera);
+        if (tempVec.z < 1.0) {
+          const screenX = (tempVec.x * 0.5 + 0.5) * window.innerWidth;
+          const screenY = (-(tempVec.y * 0.5) + 0.5) * window.innerHeight;
+          activeParts.push({
+            part: p,
+            screenX,
+            screenY,
+            depth: tempVec.z,
+          });
         }
       }
 
-      // Sort by screenY to prevent crossing leader lines
-      leftParts.sort((a, b) => a.screenY - b.screenY);
-      rightParts.sort((a, b) => a.screenY - b.screenY);
+      activeParts.sort((a, b) => a.screenY - b.screenY);
+      const half = Math.ceil(activeParts.length / 2);
+      const leftParts = activeParts.slice(0, half);
+      const rightParts = activeParts.slice(half);
 
       let svgHTML = '';
       let domHTML = '';
+      const opacity = Math.min(1, Math.max(0.15, W.explodeProgress * 1.5));
 
-      // Distribute along left column
-      const leftGutterX = Math.max(20, width * 0.05);
-      const rightGutterX = Math.min(width - 260, width * 0.95 - 240);
-      const verticalGap = Math.min(75, (height - 120) / Math.max(leftParts.length, rightParts.length, 1));
+      function layoutColumn(columnParts, isLeft) {
+        const cardX = isLeft ? 18 : window.innerWidth - 258;
+        const totalHeight = window.innerHeight - 140;
+        const verticalGap = Math.max(48, Math.min(84, totalHeight / Math.max(1, columnParts.length)));
 
-      function layoutColumn(items, isLeft) {
-        items.forEach((item, idx) => {
-          const cardX = isLeft ? leftGutterX : rightGutterX;
-          const cardY = 60 + idx * verticalGap;
+        columnParts.forEach((item, idx) => {
+          const cardY = 55 + idx * verticalGap;
           const anchorPointX = item.screenX;
           const anchorPointY = item.screenY;
           const attachPointX = isLeft ? cardX + 240 : cardX;
           const attachPointY = cardY + 24;
 
-          // Crisp SVG leader line
           svgHTML += `
             <circle cx="${anchorPointX}" cy="${anchorPointY}" r="4" fill="#06b6d4" stroke="#ffffff" stroke-width="1.5" opacity="${opacity}" />
             <polyline points="${anchorPointX},${anchorPointY} ${attachPointX},${attachPointY}" 
                       fill="none" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="3,3" opacity="${opacity * 0.85}" />
           `;
 
-          // HTML Card
           domHTML += `
             <div class="teardown-label visible" 
                  style="left: ${cardX}px; top: ${cardY}px; opacity: ${opacity};"
@@ -1085,16 +1641,15 @@
     }
 
     // ========================================================
-    // 7. RENDER LOOP WITH NaN / HDR GUARD PASS
+    // 9. RENDER LOOP WITH NaN / HDR GUARD PASS
     // ========================================================
     const clock = new THREE.Clock();
 
     function animate() {
       requestAnimationFrame(animate);
-
       const delta = Math.min(clock.getDelta(), 0.1);
 
-      // NaN / HDR Guard Pass
+      // Guard check
       if (isNaN(camera.position.x) || isNaN(camera.position.y) || isNaN(camera.position.z)) {
         camera.position.set(0, 2.5, 6.5);
       }
@@ -1114,14 +1669,12 @@
       }
 
       renderer.render(scene, camera);
-
-      // Update vertex-anchored leader lines
       updateTeardownLabels();
     }
     animate();
 
     // ========================================================
-    // 8. WINDOW RESIZE HANDLING
+    // 10. WINDOW RESIZE HANDLING
     // ========================================================
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
@@ -1130,9 +1683,9 @@
     });
 
     // ========================================================
-    // 9. POSTMESSAGE COMMUNICATION FROM REACT PARENT
+    // 11. POSTMESSAGE COMMUNICATION FROM REACT PARENT
     // ========================================================
-    window.addEventListener('message', (event) => {
+    window.addEventListener('message', async (event) => {
       const data = event.data;
       if (!data || !data.type) return;
 
@@ -1143,6 +1696,51 @@
           } else {
             buildTurbofanJetEngine();
           }
+          break;
+
+        case 'CLEAR_STAGE':
+          W.clear();
+          break;
+
+        case 'RUN_PART': {
+          const { partName, code } = data;
+          try {
+            const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+            const runner = new AsyncFunction('W', 'THREE', 'scene', 'camera', code);
+            await runner(W, THREE, scene, camera);
+            window.parent.postMessage({ type: 'PART_SUCCESS', partName }, '*');
+          } catch (err) {
+            console.error('Part execution error in part:', partName, err);
+            window.parent.postMessage({
+              type: 'PART_ERROR',
+              partName,
+              code,
+              error: err.message || String(err),
+            }, '*');
+          }
+          break;
+        }
+
+        case 'SET_THROTTLE':
+          W.setThrottle(Number(data.value));
+          break;
+
+        case 'SET_AIRFLOW':
+          W.setAirflow(Boolean(data.enabled));
+          break;
+
+        case 'SET_SYNTH_MUTE':
+          Synth.setMute(Boolean(data.muted));
+          break;
+
+        case 'LOAD_REFERENCE_IMAGE':
+          if (data.dataUrl) {
+            ImageBench.loadReference(data.dataUrl);
+          }
+          break;
+
+        case 'HAND_LANDMARKS_DATA':
+          HandRig.updateData(data);
           break;
 
         case 'SET_EXPLODE':

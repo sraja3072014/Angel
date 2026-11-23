@@ -41,6 +41,14 @@ import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
 import { HoloEarthStage } from "./components/HoloEarthStage";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
 import { WorkshopStagePanel } from "./components/WorkshopStagePanel";
+import {
+  detectPhysicalBuildPrompt,
+  WORKSHOP_BUILDER_SYSTEM_PROMPT,
+  parseWorkshopProtocolStream,
+  WorkshopBuildState,
+  saveWorkshopBuild,
+  getSavedWorkshopBuilds,
+} from "./services/workshopBuilder";
 
 interface ChatMessage {
   id: string;
@@ -74,6 +82,7 @@ export default function App() {
 
   // Workspace Mode: "chat" vs "task" vs "workshop"
   const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task" | "workshop">("chat");
+  const [activeWorkshopBuild, setActiveWorkshopBuild] = useState<WorkshopBuildState | null>(null);
 
   // Ambient Earth Opacity (defaults to 50%)
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
@@ -348,6 +357,194 @@ export default function App() {
         ];
         setMessages(msgs);
         voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      // Workshop voice shortcuts: Throttle, Airflow, Synth Sound, Saved Builds
+      if (promptLower.includes("start the engine") || promptLower.includes("full power") || promptLower.includes("full throttle")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_THROTTLE", value: 1.0 }, "*");
+        const replyText = "Engine throttled to 100% full military power.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Full Throttle", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("idle engine") || promptLower === "idle" || promptLower.includes("idle throttle")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_THROTTLE", value: 0.25 }, "*");
+        const replyText = "Engine set to idle spool.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Idle Throttle", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("shut it down") || promptLower.includes("shut down engine") || promptLower.includes("cut engine") || promptLower.includes("stop engine")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_THROTTLE", value: 0.0 }, "*");
+        const replyText = "Engine turbine spool shut down.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Engine Cut", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("show me the airflow") || promptLower.includes("show airflow") || promptLower.includes("turn on airflow")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_AIRFLOW", enabled: true }, "*");
+        const replyText = "Aerodynamic airflow particle stream engaged.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Airflow Active", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("hide airflow") || promptLower.includes("turn off airflow")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_AIRFLOW", enabled: false }, "*");
+        const replyText = "Aerodynamic airflow particle simulation paused.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Airflow Paused", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("turn off fan sounds") || promptLower.includes("mute engine") || promptLower.includes("silence engine")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_SYNTH_MUTE", muted: true }, "*");
+        const replyText = "Engine audio synthesizer muted.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Synth Muted", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("turn on fan sounds") || promptLower.includes("unmute engine")) {
+        setWorkspaceMode("workshop");
+        window.postMessage({ type: "SET_SYNTH_MUTE", muted: false }, "*");
+        const replyText = "Engine audio synthesizer unmuted.";
+        const msgs = [
+          ...updatedUserMsgs,
+          { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Synth Unmuted", timestamp: formattedTime },
+        ];
+        setMessages(msgs);
+        voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
+      }
+
+      if (promptLower.includes("open the last build") || promptLower.includes("load last build") || promptLower.includes("previous build")) {
+        const saved = getSavedWorkshopBuilds();
+        if (saved.length > 0) {
+          setWorkspaceMode("workshop");
+          setActiveWorkshopBuild(saved[0]);
+          const replyText = `Loading previous 3D build: ${saved[0].title}.`;
+          const msgs = [
+            ...updatedUserMsgs,
+            { id: assistantMsgId, role: "assistant" as const, text: replyText, actionExecuted: "Loaded Saved Build", timestamp: formattedTime },
+          ];
+          setMessages(msgs);
+          voiceRef.current?.speak(replyText, () => setSpeaking(true), () => setSpeaking(false));
+          return;
+        }
+      }
+
+      // 3D Physical Object Build Detector -> Live Multi-LLM Streaming 3D Builder
+      if (detectPhysicalBuildPrompt(prompt)) {
+        setWorkspaceMode("workshop");
+        const initialBuild: WorkshopBuildState = {
+          id: `build_${Date.now()}`,
+          title: "Generating 3D Assembly...",
+          prompt,
+          parts: [],
+          timestamp: "Just now",
+        };
+        setActiveWorkshopBuild(initialBuild);
+
+        const promptWithSystem = `${WORKSHOP_BUILDER_SYSTEM_PROMPT}\n\nUSER 3D REQUEST: ${prompt}`;
+        let full3DResponse = "";
+
+        await brain.askGemini(promptWithSystem, {
+          screenBase64: screenB64,
+          onChunk: (chunk) => {
+            full3DResponse = chunk;
+            const parsed = parseWorkshopProtocolStream(chunk);
+            setActiveWorkshopBuild((prev) => {
+              const baseParts = [...parsed.parts];
+              if (parsed.inProgressPart) {
+                baseParts.push({
+                  id: parsed.inProgressPart.name,
+                  name: parsed.inProgressPart.name,
+                  status: parsed.inProgressPart.status,
+                  code: parsed.inProgressPart.code,
+                  completed: false,
+                });
+              }
+              return {
+                id: prev?.id || initialBuild.id,
+                title: parsed.title || prev?.title || "3D Procedural Assembly",
+                prompt,
+                parts: baseParts,
+                spokenSummary: parsed.spokenSummary,
+                timestamp: "Just now",
+              };
+            });
+          },
+        });
+
+        const finalParsed = parseWorkshopProtocolStream(full3DResponse);
+        const completedBuild: WorkshopBuildState = {
+          id: initialBuild.id,
+          title: finalParsed.title || "3D Procedural Assembly",
+          prompt,
+          parts: finalParsed.parts,
+          spokenSummary: finalParsed.spokenSummary,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        };
+        setActiveWorkshopBuild(completedBuild);
+        saveWorkshopBuild(completedBuild);
+
+        const summaryText =
+          finalParsed.spokenSummary ||
+          `Completed 3D assembly of ${completedBuild.title} with ${completedBuild.parts.length} mechanical components.`;
+        const buildMsgs = [
+          ...updatedUserMsgs,
+          {
+            id: assistantMsgId,
+            role: "assistant" as const,
+            text: summaryText,
+            actionExecuted: "3D Assembly Generated",
+            timestamp: formattedTime,
+          },
+        ];
+        setMessages(buildMsgs);
+        if (activeSessionId) {
+          setSessions((prev) => {
+            const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: buildMsgs } : s));
+            try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+            return sUpdated;
+          });
+        }
+        voiceRef.current?.speak(summaryText, () => setSpeaking(true), () => setSpeaking(false));
         return;
       }
 
@@ -681,6 +878,8 @@ export default function App() {
               <WorkshopStagePanel
                 onClose={() => setWorkspaceMode("chat")}
                 onVoiceSpeak={(t) => voiceRef.current?.speak(t, () => setSpeaking(true), () => setSpeaking(false))}
+                activeBuild={activeWorkshopBuild}
+                onTriggerPrompt={(p, img) => handleSendMessage(p, img)}
               />
             </div>
           ) : (
