@@ -2,6 +2,7 @@ import React, { Component, ErrorInfo, ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { CursorCompanionOverlay } from "./components/CursorCompanionOverlay";
+import "./index.css";
 import "./App.css";
 
 interface ErrorBoundaryProps {
@@ -60,13 +61,16 @@ class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
   }
 }
 
-// Check window query params to mount either full dashboard or standalone desktop 3D cursor orb
-const isCursorOrbMode = typeof window !== "undefined" && window.location.search.includes("mode=cursor_orb");
+// Check window query params to mount either full dashboard or standalone desktop Co-Pilot popup
+const isCopilotMode = typeof window !== "undefined" && (
+  window.location.search.includes("mode=copilot_popup") ||
+  window.location.search.includes("mode=cursor_orb")
+);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      {isCursorOrbMode ? (
+      {isCopilotMode ? (
         <div className="w-screen h-screen bg-transparent overflow-hidden flex items-center justify-center select-none">
           <CursorCompanionOverlay isStandaloneWindow={true} />
         </div>

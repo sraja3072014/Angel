@@ -45,7 +45,12 @@ unsafe extern "system" {
     fn RegisterHotKey(hWnd: *mut std::ffi::c_void, id: i32, fsModifiers: u32, vk: u32) -> i32;
     fn GetMessageW(lpMsg: *mut MSG, hWnd: *mut std::ffi::c_void, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
     fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+    fn GetForegroundWindow() -> *mut std::ffi::c_void;
+    fn SetForegroundWindow(hWnd: *mut std::ffi::c_void) -> i32;
 }
+
+#[cfg(target_os = "windows")]
+static LAST_EXTERNAL_HWND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(target_os = "windows")]
 #[link(name = "winmm")]
@@ -105,15 +110,33 @@ fn start_global_hotkey_listener(app_handle: tauri::AppHandle) {
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
                 if msg.message == WM_HOTKEY && msg.w_param == 9999 {
                     use tauri::Emitter;
+
+                    // Capture external foreground window HWND before showing popup
+                    let fg_hwnd = GetForegroundWindow() as usize;
+                    if fg_hwnd != 0 {
+                        LAST_EXTERNAL_HWND.store(fg_hwnd, std::sync::atomic::Ordering::SeqCst);
+                    }
+
                     let _ = app_handle.emit("angel-summon-copilot", ());
 
-                    // If cursor_orb window exists, make it interactive, expand size and focus
-                    if let Some(orb_win) = app_handle.get_webview_window("cursor_orb") {
-                        let _ = orb_win.show();
-                        let _ = orb_win.unminimize();
-                        let _ = orb_win.set_size(tauri::LogicalSize::new(420.0, 310.0));
-                        let _ = orb_win.set_ignore_cursor_events(false);
-                        let _ = orb_win.set_focus();
+                    // If copilot_popup window exists, position near cursor (clamped), show, and focus
+                    if let Some(popup) = app_handle.get_webview_window("copilot_popup") {
+                        if popup.is_visible().unwrap_or(false) {
+                            let _ = popup.hide();
+                        } else {
+                            let mut pt = POINT { x: 0, y: 0 };
+                            let (mut target_x, mut target_y) = (100, 100);
+                            if GetCursorPos(&mut pt) != 0 {
+                                target_x = (pt.x + 16).max(20);
+                                target_y = (pt.y + 16).max(20);
+                            }
+                            let _ = popup.set_size(tauri::LogicalSize::new(450.0, 330.0));
+                            let _ = popup.set_position(tauri::PhysicalPosition::new(target_x, target_y));
+                            let _ = popup.set_ignore_cursor_events(false);
+                            let _ = popup.show();
+                            let _ = popup.unminimize();
+                            let _ = popup.set_focus();
+                        }
                     } else if let Some(window) = app_handle.get_webview_window("main") {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
@@ -1214,6 +1237,15 @@ fn get_active_app_and_selection() -> Result<ActiveAppContextWithSelection, Strin
 fn insert_text_at_active_cursor(text: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
+        // If we captured an external foreground window, restore focus to it first
+        let fg_hwnd = LAST_EXTERNAL_HWND.load(std::sync::atomic::Ordering::SeqCst);
+        if fg_hwnd != 0 {
+            unsafe {
+                SetForegroundWindow(fg_hwnd as *mut std::ffi::c_void);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
         let temp_dir = std::env::temp_dir();
         let buf_path = temp_dir.join("angel_paste_buffer.txt");
         std::fs::write(&buf_path, text.as_bytes())
@@ -1246,8 +1278,39 @@ fn type_text_into_active_app(text: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn hide_copilot_popup(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("copilot_popup") {
+        let _ = win.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn show_copilot_popup(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("copilot_popup") {
+        #[cfg(target_os = "windows")]
+        unsafe {
+            let fg_hwnd = GetForegroundWindow() as usize;
+            if fg_hwnd != 0 {
+                LAST_EXTERNAL_HWND.store(fg_hwnd, std::sync::atomic::Ordering::SeqCst);
+            }
+            let mut pt = POINT { x: 0, y: 0 };
+            if GetCursorPos(&mut pt) != 0 {
+                let _ = win.set_position(tauri::PhysicalPosition::new((pt.x + 16).max(20), (pt.y + 16).max(20)));
+            }
+        }
+        let _ = win.set_size(tauri::LogicalSize::new(450.0, 330.0));
+        let _ = win.set_ignore_cursor_events(false);
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn toggle_cursor_orb(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("cursor_orb") {
+    if let Some(win) = app.get_webview_window("copilot_popup") {
         if enabled {
             let _ = win.show();
         } else {
@@ -1259,13 +1322,14 @@ fn toggle_cursor_orb(app: tauri::AppHandle, enabled: bool) -> Result<(), String>
 
 #[tauri::command]
 fn set_cursor_orb_interactive(app: tauri::AppHandle, interactive: bool) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("cursor_orb") {
+    if let Some(win) = app.get_webview_window("copilot_popup") {
         let _ = win.set_ignore_cursor_events(!interactive);
         if interactive {
-            let _ = win.set_size(tauri::LogicalSize::new(420.0, 310.0));
+            let _ = win.set_size(tauri::LogicalSize::new(450.0, 330.0));
+            let _ = win.show();
             let _ = win.set_focus();
         } else {
-            let _ = win.set_size(tauri::LogicalSize::new(54.0, 54.0));
+            let _ = win.hide();
         }
     }
     Ok(())
@@ -1553,58 +1617,31 @@ pub fn run() {
             // 3. Start Native Windows Alt + Space Global Hotkey Listener
             start_global_hotkey_listener(app_handle.clone());
 
-            // 3.1 Setup System-Wide Transparent Desktop 3D Cursor Orb Window
-            let orb_window_opt = if let Some(win) = app.get_webview_window("cursor_orb") {
+            // 3.1 Setup System-Wide Transparent Alt+Space Co-Pilot Window (Kept hidden until Alt+Space)
+            let copilot_window_opt = if let Some(win) = app.get_webview_window("copilot_popup") {
                 Some(win)
             } else {
-                let orb_route = "/?mode=cursor_orb";
-                let orb_builder = WebviewWindowBuilder::new(
+                let copilot_route = "/?mode=copilot_popup";
+                let copilot_builder = WebviewWindowBuilder::new(
                     &app_handle,
-                    "cursor_orb",
-                    WebviewUrl::App(orb_route.into()),
+                    "copilot_popup",
+                    WebviewUrl::App(copilot_route.into()),
                 )
-                .title("Angel Cursor Companion")
-                .inner_size(54.0, 54.0)
+                .title("Angel Co-Pilot")
+                .inner_size(450.0, 330.0)
                 .transparent(true)
                 .decorations(false)
                 .shadow(false)
                 .always_on_top(true)
                 .skip_taskbar(true)
-                .resizable(false);
-                orb_builder.build().ok()
+                .resizable(false)
+                .visible(false);
+                copilot_builder.build().ok()
             };
 
-            if let Some(orb_win) = orb_window_opt {
-                let _ = orb_win.set_shadow(false);
-                let _ = orb_win.set_ignore_cursor_events(true);
-                let _ = orb_win.show();
-
-                // Mouse Tracking Thread (~60fps) following cursor across entire Windows desktop
-                #[cfg(target_os = "windows")]
-                {
-                    let orb_handle = orb_win.clone();
-                    std::thread::spawn(move || {
-                        let mut pt = POINT { x: 0, y: 0 };
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_millis(16));
-                            unsafe {
-                                if GetCursorPos(&mut pt) != 0 {
-                                    // Check if currently expanded as interactive popover
-                                    if let Ok(size) = orb_handle.inner_size() {
-                                        if size.width > 100 {
-                                            // When expanded into Co-Pilot card, don't move with mouse
-                                            continue;
-                                        }
-                                    }
-                                    // Offset by +22, +22 so orb does not block user clicks
-                                    let target_x = pt.x + 22;
-                                    let target_y = pt.y + 22;
-                                    let _ = orb_handle.set_position(tauri::PhysicalPosition::new(target_x, target_y));
-                                }
-                            }
-                        }
-                    });
-                }
+            if let Some(copilot_win) = copilot_window_opt {
+                let _ = copilot_win.set_shadow(false);
+                let _ = copilot_win.hide();
             }
 
             // 4. Background Pre-warm Voice Cache for Sub-10ms Instant Audio
@@ -1798,7 +1835,9 @@ pub fn run() {
             get_active_app_and_selection,
             type_text_into_active_app,
             toggle_cursor_orb,
-            set_cursor_orb_interactive
+            set_cursor_orb_interactive,
+            hide_copilot_popup,
+            show_copilot_popup
         ])
         .run(tauri::generate_context!())
         .expect("error while running Project Angel");

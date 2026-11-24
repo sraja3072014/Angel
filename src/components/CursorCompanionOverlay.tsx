@@ -76,13 +76,9 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
       }
     });
 
-    // Listen to global hotkey Alt+Space (toggle open / close)
+    // Listen to global hotkey Alt+Space
     const unlisten = listen("angel-summon-copilot", () => {
-      if (isOpenRef.current) {
-        handleClosePopover();
-      } else {
-        handleOpenPopover();
-      }
+      handleOpenPopover();
     });
 
     // Close on Escape key press
@@ -107,14 +103,14 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     setIsOpen(true);
     fetchContext();
     if (isStandaloneWindow) {
-      invoke("set_cursor_orb_interactive", { interactive: true }).catch(() => {});
+      invoke("show_copilot_popup").catch(() => {});
     }
   };
 
   const handleClosePopover = () => {
     setIsOpen(false);
     if (isStandaloneWindow) {
-      invoke("set_cursor_orb_interactive", { interactive: false }).catch(() => {});
+      invoke("hide_copilot_popup").catch(() => {});
     }
   };
 
@@ -348,113 +344,101 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
 
   return (
     <div className="w-full h-full flex items-center justify-center p-0 select-none font-sans bg-transparent">
-      {!isOpen ? (
-        /* Floating Compact Desktop 3D Orb (54x54 px) - Zero Square Box, Pure Transparent */
-        <div
-          onClick={handleOpenPopover}
-          className="cursor-pointer flex items-center justify-center w-[54px] h-[54px] bg-transparent border-none outline-none shadow-none transition-transform hover:scale-110 active:scale-95"
-          title="Angel AI 3D Co-Pilot (Alt+Space)"
-        >
-          {/* Three.js Miniature Canvas */}
-          <div ref={mountRef} className="w-[54px] h-[54px] flex items-center justify-center pointer-events-none bg-transparent" />
-        </div>
-      ) : (
-        /* Expanded Interactive Co-Pilot Popover */
-        <div className="w-[420px] max-h-[310px] rounded-2xl bg-slate-950/95 border border-cyan-400/60 backdrop-blur-2xl shadow-[0_0_40px_rgba(34,211,238,0.3)] p-3.5 space-y-2.5 flex flex-col justify-between">
-          {/* Header & Active App Context Pill */}
-          <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-6 h-6 rounded-lg bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center shrink-0">
-                <Sparkles size={13} className="text-cyan-300" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-[11px] font-extrabold text-white truncate flex items-center gap-1.5">
-                  <span>Active App: {activeApp.app_name}</span>
-                </div>
-                <div className="text-[9px] text-slate-400 font-mono truncate max-w-[240px]">
-                  {activeApp.window_title || activeApp.process_name}
-                </div>
-              </div>
+      {/* Interactive Co-Pilot Popover */}
+      <div className="w-[430px] max-h-[310px] rounded-2xl bg-slate-950/95 border border-cyan-400/60 backdrop-blur-2xl shadow-[0_0_40px_rgba(34,211,238,0.3)] p-3.5 space-y-2.5 flex flex-col justify-between">
+        {/* Header & Active App Context Pill */}
+        <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-6 h-6 rounded-lg bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center shrink-0">
+              <Sparkles size={13} className="text-cyan-300" />
             </div>
-
-            <div className="flex items-center gap-1">
-              <button
-                onClick={handleInspectScreen}
-                disabled={isProcessing}
-                className="p-1 rounded-lg hover:bg-white/10 text-cyan-400 hover:text-cyan-300 transition"
-                title="Screen Vision: Inspect Foreground Window"
-              >
-                <Camera size={14} />
-              </button>
-              <button
-                onClick={handleClosePopover}
-                className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition"
-                title="Close Co-Pilot"
-              >
-                <X size={15} />
-              </button>
+            <div className="min-w-0">
+              <div className="text-[11px] font-extrabold text-white truncate flex items-center gap-1.5">
+                <span>Working in: {activeApp.app_name}</span>
+              </div>
+              <div className="text-[9px] text-slate-400 font-mono truncate max-w-[240px]">
+                {activeApp.window_title || activeApp.process_name}
+              </div>
             </div>
           </div>
 
-          {/* Response Box / Selected Text Box */}
-          <div className="flex-1 max-h-[140px] overflow-y-auto p-2 rounded-xl bg-black/60 border border-white/10 text-xs text-slate-200 leading-relaxed font-sans space-y-1.5">
-            {quickAnswer ? (
-              <div>{quickAnswer}</div>
-            ) : (
-              <div className="text-[11px] text-slate-400">
-                Paste Tamil or English text to translate, generate, or summarize for <b>{activeApp.app_name}</b>.
-              </div>
-            )}
-          </div>
-
-          {/* Action Row: Type at Cursor & Speak Text */}
-          {quickAnswer && (
-            <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
-              <button
-                onClick={() => handleTypeAtCursor(quickAnswer)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 text-[10px] font-bold border border-cyan-400/40 transition"
-              >
-                <Keyboard size={12} />
-                <span>⌨️ Type at Cursor</span>
-              </button>
-
-              <button
-                onClick={() => speakText(quickAnswer)}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-bold border border-emerald-400/40 transition"
-              >
-                <Volume2 size={12} />
-                <span>🔊 Speak</span>
-              </button>
-            </div>
-          )}
-
-          {pastedStatus && (
-            <div className="text-[10px] text-emerald-300 font-mono flex items-center gap-1">
-              <Check size={11} />
-              <span>{pastedStatus}</span>
-            </div>
-          )}
-
-          {/* Prompt Form accepting full Tamil & English pasted text */}
-          <form onSubmit={handleQuickSubmit} className="relative flex items-center gap-1.5 pt-1">
-            <input
-              ref={inputRef}
-              type="text"
-              value={promptText}
-              onChange={(e) => setPromptText(e.target.value)}
-              placeholder={`Ask or paste in ${activeApp.app_name}...`}
-              className="flex-1 px-3 py-1.5 bg-black/70 border border-white/20 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
-            />
+          <div className="flex items-center gap-1">
             <button
-              type="submit"
-              disabled={!promptText.trim() || isProcessing}
-              className="p-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold transition disabled:opacity-40"
+              onClick={handleInspectScreen}
+              disabled={isProcessing}
+              className="p-1 rounded-lg hover:bg-white/10 text-cyan-400 hover:text-cyan-300 transition"
+              title="Screen Vision: Inspect Foreground Window"
             >
-              <Send size={13} />
+              <Camera size={14} />
             </button>
-          </form>
+            <button
+              onClick={handleClosePopover}
+              className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition"
+              title="Close Co-Pilot (Esc)"
+            >
+              <X size={15} />
+            </button>
+          </div>
         </div>
-      )}
+
+        {/* Response Box / Selected Text Box */}
+        <div className="flex-1 max-h-[140px] overflow-y-auto p-2 rounded-xl bg-black/60 border border-white/10 text-xs text-slate-200 leading-relaxed font-sans space-y-1.5">
+          {quickAnswer ? (
+            <div>{quickAnswer}</div>
+          ) : (
+            <div className="text-[11px] text-slate-400">
+              Paste Tamil, Tanglish, or English text to translate, explain, or fix grammar for <b>{activeApp.app_name}</b>.
+            </div>
+          )}
+        </div>
+
+        {/* Action Row: Type at Cursor & Speak Text */}
+        {quickAnswer && (
+          <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
+            <button
+              onClick={() => handleTypeAtCursor(quickAnswer)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 text-[10px] font-bold border border-cyan-400/40 transition"
+            >
+              <Keyboard size={12} />
+              <span>⌨️ Type at Cursor</span>
+            </button>
+
+            <button
+              onClick={() => speakText(quickAnswer)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-bold border border-emerald-400/40 transition"
+            >
+              <Volume2 size={12} />
+              <span>🔊 Speak</span>
+            </button>
+          </div>
+        )}
+
+        {pastedStatus && (
+          <div className="text-[10px] text-emerald-300 font-mono flex items-center gap-1">
+            <Check size={11} />
+            <span>{pastedStatus}</span>
+          </div>
+        )}
+
+        {/* Prompt Form accepting full Tamil & English pasted text */}
+        <form onSubmit={handleQuickSubmit} className="relative flex items-center gap-1.5 pt-1">
+          <input
+            ref={inputRef}
+            type="text"
+            value={promptText}
+            onChange={(e) => setPromptText(e.target.value)}
+            placeholder={`Ask or paste in ${activeApp.app_name}...`}
+            className="flex-1 px-3 py-1.5 bg-black/70 border border-white/20 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+          />
+          <button
+            type="submit"
+            disabled={!promptText.trim() || isProcessing}
+            className="p-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold transition disabled:opacity-40"
+          >
+            <Send size={13} />
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/* 100% INVISIBLE SCROLLBARS ACROSS ALL WINDOWS & CONTAINERS */
+* {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+*::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
 html, body, #root {
   background-color: transparent !important;
   background: transparent !important;
