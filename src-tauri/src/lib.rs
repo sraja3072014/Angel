@@ -413,6 +413,7 @@ async fn proxy_local_llm_request(
     url: String,
     api_key: Option<String>,
     payload: String,
+    timeout_secs: Option<u64>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let is_post = !payload.trim().is_empty();
@@ -421,9 +422,10 @@ async fn proxy_local_llm_request(
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
+        let timeout = timeout_secs.unwrap_or(25);
         cmd.arg("-s").arg("-S");
-        cmd.arg("-m").arg("8");
-        cmd.arg("--connect-timeout").arg("4");
+        cmd.arg("-m").arg(timeout.to_string());
+        cmd.arg("--connect-timeout").arg("5");
         cmd.arg("-X").arg(if is_post { "POST" } else { "GET" });
         cmd.arg(&url);
 
@@ -611,9 +613,10 @@ fn url_encode_tts_text(input: &str) -> String {
 #[tauri::command]
 async fn synthesize_neural_tts(
     text: String,
-    voice: String,
-    rate_percent: i32,
-    pitch_hz: i32,
+    lang: Option<String>,
+    voice: Option<String>,
+    _rate_percent: Option<i32>,
+    _pitch_hz: Option<i32>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let clean_text = text
@@ -631,224 +634,114 @@ async fn synthesize_neural_tts(
         }
 
         let has_tamil = clean_text.chars().any(|c| ('\u{0B80}'..='\u{0BFF}').contains(&c));
-        let selected_voice = if voice.trim().is_empty() {
-            if has_tamil {
-                "ta-IN-PallaviNeural".to_string()
+        let target_lang = if has_tamil {
+            "ta"
+        } else if let Some(ref l) = lang {
+            let trimmed = l.trim();
+            if trimmed == "ta" || trimmed == "ta-IN" {
+                "ta"
+            } else if trimmed.starts_with("en") {
+                "en-IN"
             } else {
-                "en-IN-NeerjaNeural".to_string()
+                trimmed
             }
-        } else {
-            voice.trim().to_string()
-        };
-
-        let lang_code = if selected_voice.starts_with("ta-") || has_tamil {
-            "ta-IN"
-        } else if selected_voice.starts_with("en-GB") {
-            "en-GB"
+        } else if let Some(ref v) = voice {
+            if v.starts_with("ta-") {
+                "ta"
+            } else if v.starts_with("en-GB") {
+                "en-GB"
+            } else {
+                "en-IN"
+            }
         } else {
             "en-IN"
         };
 
-        let rate_str = format!("{:+}%", rate_percent);
-        let pitch_str = format!("{:+2}Hz", pitch_hz);
-
-        // SSML Payload for Microsoft Speech Synthesis
-        let ssml = format!(
-            "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{lang}'>\
-                <voice name='{voice}'>\
-                    <prosody rate='{rate}' pitch='{pitch}'>\
-                        {escaped_text}\
-                    </prosody>\
-                </voice>\
-            </speak>",
-            lang = lang_code,
-            voice = selected_voice,
-            rate = rate_str,
-            pitch = pitch_str,
-            escaped_text = clean_text
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;")
-        );
-
-        let temp_dir = std::env::temp_dir();
-        let target_mp3 = temp_dir.join(format!(
-            "angel_neural_{}_{}.mp3",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
-
-        // 1. Edge ReadAloud WebSocket synthesis attempt via PowerShell
-        #[cfg(target_os = "windows")]
-        {
-            let ps_edge = format!(
-                r#"
-                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-                $unix = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-                $ticks = [long]($unix + 11644473600)
-                $ticks -= ($ticks % 300)
-                $ticks = $ticks * [long]10000000
-                $token = "6A5AA1D4EAFF4E9FB37E23D68491D6F4"
-                $strToHash = "$ticks$token"
-                $hasher = [System.Security.Cryptography.SHA256]::Create()
-                $bytes = [System.Text.Encoding]::ASCII.GetBytes($strToHash)
-                $hashBytes = $hasher.ComputeHash($bytes)
-                $gec = [BitConverter]::ToString($hashBytes).Replace('-', '')
-
-                $ws = New-Object System.Net.WebSockets.ClientWebSocket
-                $ws.Options.SetRequestHeader('Origin', 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold')
-                $url = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=$token&Sec-MS-GEC=$gec&Sec-MS-GEC-Version=1-130.0.2849.68"
-                $uri = [Uri]$url
-                $ct = [Threading.CancellationToken]::None
-                $t = $ws.ConnectAsync($uri, $ct)
-                if ($t.Wait(3000) -and $ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {{
-                    $cfgMsg = "Content-Type:application/json; charset=utf-8`r`nPath:speech.config`r`n`r`n{{""context"":{{""synthesis"":{{""audio"":{{""metadataoptions"":{{""sentenceBoundaryEnabled"":""false"",""wordBoundaryEnabled"":""false""}},""outputFormat"":""audio-24khz-48kbitrate-mono-mp3""}}}}}}}}"
-                    $cfgBytes = [System.Text.Encoding]::UTF8.GetBytes($cfgMsg)
-                    $ws.SendAsync([ArraySegment[byte]]$cfgBytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait(2000)
-
-                    $reqId = [Guid]::NewGuid().ToString("N").ToUpper()
-                    $ssmlContent = @"
-{}
-"@
-                    $ssmlMsg = "X-RequestId:$reqId`r`nContent-Type:application/ssml+xml`r`nPath:ssml`r`n`r`n$ssmlContent"
-                    $ssmlBytes = [System.Text.Encoding]::UTF8.GetBytes($ssmlMsg)
-                    $ws.SendAsync([ArraySegment[byte]]$ssmlBytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).Wait(2000)
-
-                    $ms = New-Object System.IO.MemoryStream
-                    $buf = New-Object byte[] 8192
-                    $turnEnd = $false
-                    while (-not $turnEnd -and $ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {{
-                        $res = $ws.ReceiveAsync([ArraySegment[byte]]$buf, $ct)
-                        if (-not $res.Wait(5000)) {{ break }}
-                        $count = $res.Result.Count
-                        if ($count -gt 2) {{
-                            if ($res.Result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Binary) {{
-                                $headerLen = ($buf[0] -shl 8) -bor $buf[1]
-                                if ($count -gt (2 + $headerLen)) {{
-                                    $audioOffset = 2 + $headerLen
-                                    $audioLen = $count - $audioOffset
-                                    $ms.Write($buf, $audioOffset, $audioLen)
-                                }}
-                            }} elseif ($res.Result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Text) {{
-                                $txt = [System.Text.Encoding]::UTF8.GetString($buf, 0, $count)
-                                if ($txt -match "Path:turn\.end") {{
-                                    $turnEnd = $true
-                                }}
-                            }}
-                        }}
-                    }}
-                    if ($ms.Length -gt 1024) {{
-                        [System.IO.File]::WriteAllBytes('{}', $ms.ToArray())
-                    }}
-                    $ws.Dispose()
-                }}
-                "#,
-                ssml,
-                target_mp3.to_string_lossy().replace('\'', "''")
-            );
-
-            let mut cmd = Command::new("powershell");
-            cmd.args(["-NoProfile", "-Command", &ps_edge]);
-            cmd.creation_flags(CREATE_NO_WINDOW);
-            let _ = cmd.output();
-        }
-
-        // 2. High-Fidelity Neural Fallback via curl.exe (Google Neural Audio stream)
-        // Ensures Tamil and English audio ALWAYS synthesize with crystal clear pronunciation
-        if !target_mp3.exists() || std::fs::metadata(&target_mp3).map(|m| m.len()).unwrap_or(0) < 1000 {
-            let short_lang = if has_tamil || selected_voice.starts_with("ta-") {
-                "ta"
-            } else if selected_voice.starts_with("en-GB") {
-                "en-GB"
-            } else {
-                "en"
-            };
-
-            // Chunk clean_text into segments of <= 180 chars for neural endpoint
-            let words = clean_text.split_whitespace().collect::<Vec<_>>();
-            let mut chunks = Vec::new();
-            let mut current_chunk = String::new();
-            for word in words {
-                if current_chunk.len() + word.len() + 1 > 180 {
-                    if !current_chunk.is_empty() {
-                        chunks.push(current_chunk);
-                        current_chunk = String::new();
-                    }
-                }
+        // Split text cleanly into <= 180 character chunks for Google Neural TTS endpoint
+        let words = clean_text.split_whitespace().collect::<Vec<_>>();
+        let mut chunks = Vec::new();
+        let mut current_chunk = String::new();
+        for word in words {
+            if current_chunk.len() + word.len() + 1 > 180 {
                 if !current_chunk.is_empty() {
-                    current_chunk.push(' ');
+                    chunks.push(current_chunk);
+                    current_chunk = String::new();
                 }
-                current_chunk.push_str(word);
             }
             if !current_chunk.is_empty() {
-                chunks.push(current_chunk);
+                current_chunk.push(' ');
             }
+            current_chunk.push_str(word);
+        }
+        if !current_chunk.is_empty() {
+            chunks.push(current_chunk);
+        }
 
-            let mut full_audio_bytes = Vec::new();
-            for chunk in chunks {
-                let encoded_q = url_encode_tts_text(&chunk);
-                let url = format!(
-                    "https://translate.google.com/translate_tts?ie=UTF-8&tl={}&client=tw-ob&q={}",
-                    short_lang, encoded_q
-                );
+        if chunks.is_empty() {
+            return Err("No text chunks available for audio synthesis.".into());
+        }
 
-                let chunk_temp = temp_dir.join(format!(
-                    "angel_chunk_{}_{}.mp3",
-                    std::process::id(),
-                    full_audio_bytes.len()
-                ));
+        let temp_dir = std::env::temp_dir();
+        let mut full_audio_bytes = Vec::new();
 
-                let mut curl_cmd = Command::new("curl.exe");
-                #[cfg(target_os = "windows")]
-                curl_cmd.creation_flags(CREATE_NO_WINDOW);
+        for (idx, chunk) in chunks.iter().enumerate() {
+            let encoded_q = url_encode_tts_text(chunk);
+            let url = format!(
+                "https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl={}&q={}",
+                target_lang, encoded_q
+            );
 
-                curl_cmd
-                    .arg("-s")
-                    .arg("-S")
-                    .arg("-A")
-                    .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-                    .arg(&url)
-                    .arg("-o")
-                    .arg(&chunk_temp);
+            let chunk_temp = temp_dir.join(format!(
+                "angel_tts_{}_{}_{}.mp3",
+                std::process::id(),
+                idx,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ));
 
-                let res = curl_cmd.output();
-                if let Ok(out) = res {
-                    if out.status.success() && chunk_temp.exists() {
-                        if let Ok(bytes) = std::fs::read(&chunk_temp) {
+            let mut curl_cmd = Command::new("curl.exe");
+            #[cfg(target_os = "windows")]
+            curl_cmd.creation_flags(CREATE_NO_WINDOW);
+
+            curl_cmd
+                .arg("-s")
+                .arg("-S")
+                .arg("-m")
+                .arg("10")
+                .arg("--connect-timeout")
+                .arg("5")
+                .arg("-A")
+                .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .arg(&url)
+                .arg("-o")
+                .arg(&chunk_temp);
+
+            let res = curl_cmd.output();
+            if let Ok(out) = res {
+                if out.status.success() && chunk_temp.exists() {
+                    if let Ok(bytes) = std::fs::read(&chunk_temp) {
+                        if bytes.len() > 100 {
                             full_audio_bytes.extend_from_slice(&bytes);
                         }
-                        let _ = std::fs::remove_file(chunk_temp);
                     }
+                    let _ = std::fs::remove_file(&chunk_temp);
+                } else if chunk_temp.exists() {
+                    let _ = std::fs::remove_file(&chunk_temp);
                 }
             }
-
-            if !full_audio_bytes.is_empty() {
-                let _ = std::fs::write(&target_mp3, &full_audio_bytes);
-            }
         }
 
-        if !target_mp3.exists() {
-            return Err("Neural audio synthesis failed to generate audio stream.".into());
+        if full_audio_bytes.is_empty() {
+            return Err("Audio synthesis failed to fetch MP3 audio stream.".into());
         }
 
-        let audio_bytes = std::fs::read(&target_mp3)
-            .map_err(|e| format!("Failed to read synthesized MP3: {e}"))?;
-        let _ = std::fs::remove_file(target_mp3);
-
-        if audio_bytes.len() < 200 {
-            return Err("Synthesized audio stream was too small or corrupted.".into());
-        }
-
-        let b64 = to_base64_string(&audio_bytes);
+        let b64 = to_base64_string(&full_audio_bytes);
         Ok(format!("data:audio/mp3;base64,{}", b64))
     })
     .await
-    .map_err(|e| format!("Async task join error: {e}"))?
+    .map_err(|e| format!("TTS task error: {e}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

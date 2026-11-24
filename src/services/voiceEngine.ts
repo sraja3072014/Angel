@@ -348,6 +348,10 @@ export class AngelVoiceEngine {
   /**
    * Neural Speech Synthesis (Tamil & English Dual-Route)
    */
+  public async speakText(text: string, onStart?: () => void, onEnd?: () => void): Promise<void> {
+    return this.speak(text, onStart, onEnd);
+  }
+
   public async speak(text: string, onStart?: () => void, onEnd?: () => void) {
     if (this.isMuted || localStorage.getItem("angel_voice_muted") === "true") {
       this.stopSpeaking();
@@ -379,9 +383,11 @@ export class AngelVoiceEngine {
       const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
       const voiceCfg = loadAngelVoiceConfig();
 
-      // Determine appropriate neural voice
-      let chosenVoice: string = voiceCfg.voicePersona || (hasTamil ? "ta-IN-PallaviNeural" : "en-IN-NeerjaNeural");
-      if (hasTamil && !chosenVoice.startsWith("ta-")) {
+      // Determine target language and voice
+      const isTamilMode = hasTamil || voiceCfg.languageMode === "ta-IN";
+      const targetLang = isTamilMode ? "ta" : "en-IN";
+      let chosenVoice: string = voiceCfg.voicePersona || (isTamilMode ? "ta-IN-PallaviNeural" : "en-IN-NeerjaNeural");
+      if (isTamilMode && !chosenVoice.startsWith("ta-")) {
         chosenVoice = "ta-IN-PallaviNeural";
       }
 
@@ -389,12 +395,13 @@ export class AngelVoiceEngine {
       if (voiceCfg.ttsEngine === "webspeech" && !hasTamil) {
         await this.speakWebSpeech(cleanText, false);
       } else {
-        // 2. High-Fidelity Rust Neural TTS with Edge & Google fallback
+        // 2. High-Fidelity Rust HTTP MP3 TTS Synthesizer
         try {
           const ratePercent = Math.round(((voiceCfg.speed ?? 1.0) - 1.0) * 100);
           const pitchHz = voiceCfg.pitch ?? 0;
           const base64Audio = await invoke<string>("synthesize_neural_tts", {
             text: cleanText,
+            lang: targetLang,
             voice: chosenVoice,
             ratePercent,
             pitchHz,
@@ -454,25 +461,46 @@ export class AngelVoiceEngine {
   }
 
   private async playAudioBase64(dataUrl: string, cfg: AngelVoiceConfig): Promise<void> {
-    const audio = new Audio(dataUrl);
-    audio.volume = Math.max(0, Math.min(1, (cfg.volume ?? 85) / 100));
-    audio.playbackRate = Math.max(0.5, Math.min(2.0, cfg.speed ?? 1.0));
-    this.currentAudio = audio;
+    try {
+      let rawB64 = dataUrl;
+      if (rawB64.startsWith("data:")) {
+        const parts = rawB64.split(",");
+        rawB64 = parts[1] || "";
+      }
+      const binaryStr = atob(rawB64);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: "audio/mp3" });
+      const blobUrl = URL.createObjectURL(blob);
+      const audio = new Audio(blobUrl);
 
-    await new Promise<void>((resolve) => {
-      audio.onended = () => {
-        this.currentAudio = null;
-        resolve();
-      };
-      audio.onerror = () => {
-        this.currentAudio = null;
-        resolve();
-      };
-      audio.play().catch(() => {
-        this.currentAudio = null;
-        resolve();
+      audio.volume = Math.max(0, Math.min(1, (cfg.volume ?? 85) / 100));
+      audio.playbackRate = Math.max(0.5, Math.min(2.0, cfg.speed ?? 1.0));
+      this.currentAudio = audio;
+
+      await new Promise<void>((resolve) => {
+        audio.onended = () => {
+          this.currentAudio = null;
+          URL.revokeObjectURL(blobUrl);
+          resolve();
+        };
+        audio.onerror = () => {
+          this.currentAudio = null;
+          URL.revokeObjectURL(blobUrl);
+          resolve();
+        };
+        audio.play().catch(() => {
+          this.currentAudio = null;
+          URL.revokeObjectURL(blobUrl);
+          resolve();
+        });
       });
-    });
+    } catch (e) {
+      console.warn("playAudioBase64 decoding error:", e);
+    }
   }
 
   private async speakWebSpeech(text: string, isTamil: boolean): Promise<void> {
@@ -640,6 +668,10 @@ export class AngelVoiceEngine {
 }
 
 export const angelVoice = new AngelVoiceEngine();
+
+export async function speakText(text: string, onStart?: () => void, onEnd?: () => void): Promise<void> {
+  await angelVoice.speak(text, onStart, onEnd);
+}
 
 export async function speakSecurityAlert(tamilText: string, playChime = true): Promise<void> {
   await angelVoice.speakSecurityAlert(tamilText, playChime);

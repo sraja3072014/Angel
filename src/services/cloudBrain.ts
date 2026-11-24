@@ -189,8 +189,8 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     category: "local",
     apiKey: "",
     endpoint: "http://localhost:11434",
-    defaultModel: "llama3.2:latest",
-    availableModels: ["llama3.2:latest", "qwen2.5-coder:latest", "deepseek-r1:latest"],
+    defaultModel: "qwen3.5:4b",
+    availableModels: ["qwen3.5:4b", "llama3.2:latest", "qwen2.5-coder:latest", "deepseek-r1:latest"],
     enabled: true,
     status: "local_ready",
     description: "Local offline models on localhost:11434 — auto-detected, no key.",
@@ -204,8 +204,8 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     endpoint: "http://localhost:1234/v1",
     defaultModel: "local-model",
     availableModels: ["local-model", "llama-3.2-3b-instruct"],
-    enabled: true,
-    status: "local_ready",
+    enabled: false,
+    status: "offline",
     description: "LM Studio, llama.cpp, vLLM custom endpoint — fully offline.",
     capabilities: ["⚡ LOCAL ENDPOINT", "🔒 100% PRIVATE", "≋ STREAMING", "</> CODE GEN"],
   },
@@ -386,6 +386,22 @@ export function loadAIProviders(): AIProviderConfig[] {
           continue;
         }
 
+        if (def.id === "local_lmstudio") {
+          const isExplicit = localStorage.getItem("angel_lmstudio_enabled") === "true";
+          merged.push({
+            ...def,
+            ...existing,
+            enabled: isExplicit && existing.status === "verified",
+            status: isExplicit && existing.status === "verified" ? "verified" : "offline",
+            defaultModel: defModel,
+            capabilities: def.capabilities,
+            consoleUrl: def.consoleUrl,
+            description: def.description,
+            availableModels: availModels,
+          });
+          continue;
+        }
+
         merged.push({
           ...def,
           ...existing,
@@ -450,12 +466,18 @@ export function isLocalEndpoint(url: string): boolean {
   return url.includes("127.0.0.1") || url.includes("localhost") || url.includes("0.0.0.0");
 }
 
-export async function proxyLocalRequest(url: string, apiKey?: string, payload?: any): Promise<any> {
+export async function proxyLocalRequest(
+  url: string,
+  apiKey?: string,
+  payload?: any,
+  timeoutSecs: number = 25
+): Promise<any> {
   const payloadStr = payload ? (typeof payload === "string" ? payload : JSON.stringify(payload)) : "";
   const raw = await invoke<string>("proxy_local_llm_request", {
     url,
     apiKey: apiKey || null,
     payload: payloadStr,
+    timeoutSecs,
   });
   try {
     return JSON.parse(raw);
@@ -489,7 +511,16 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
         .map((pid) => all.find((p) => p.id === pid))
         .filter((p): p is AIProviderConfig => {
           if (!p || !p.enabled) return false;
-          if (p.id === "ollama" || p.id === "local_lmstudio") return Boolean(p.endpoint && p.endpoint.trim());
+          if (p.id === "ollama") return Boolean(p.endpoint && p.endpoint.trim());
+          if (p.id === "local_lmstudio") {
+            return Boolean(
+              p.enabled &&
+              p.endpoint &&
+              p.endpoint.trim() &&
+              localStorage.getItem("angel_lmstudio_enabled") === "true" &&
+              (p.status === "verified" || p.status === "local_ready")
+            );
+          }
           return extractKeysList(p.apiKey).length > 0;
         });
 
@@ -557,9 +588,10 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       let baseUrl = provider.endpoint.replace(/\/chat\/completions$/, "").replace(/\/$/, "");
       if (!baseUrl.endsWith("/v1")) baseUrl += "/v1";
       try {
-        const data = await proxyLocalRequest(`${baseUrl}/models`);
+        const data = await proxyLocalRequest(`${baseUrl}/models`, undefined, undefined, 5);
         const latencyMs = Math.round(performance.now() - startTime);
         const models = (data?.data || []).map((m: any) => m.id);
+        localStorage.setItem("angel_lmstudio_enabled", "true");
         return {
           ok: true,
           message:
@@ -570,7 +602,8 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           models,
         };
       } catch (err: any) {
-        return { ok: false, message: `LM Studio error: ${err?.message || err}` };
+        localStorage.removeItem("angel_lmstudio_enabled");
+        return { ok: false, message: `LM Studio offline: ${err?.message || err}` };
       }
     }
 
@@ -1751,24 +1784,54 @@ Never use destructive commands (rm, del, format).`;
     options?: GeminiAskOptions
   ): Promise<string> {
     const baseUrl = provider.endpoint.replace(/\/$/, "");
-    const url = `${baseUrl}/api/chat`;
-    const postBody = {
-      model: provider.defaultModel || "llama3.2:latest",
-      messages: [
-        { role: "system", content: systemInstruction },
-        { role: "user", content: prompt },
-      ],
-      options: { temperature },
-      stream: false,
-    };
+    const model = provider.defaultModel || "qwen3.5:4b";
+
+    // 1. Try /api/chat with 30s timeout
     try {
-      const data = await proxyLocalRequest(url, undefined, postBody);
-      const reply = data?.message?.content || "";
-      options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
-      return reply;
-    } catch (e: any) {
-      throw new Error(`Ollama local error: ${e?.message || e}`);
+      const postBody = {
+        model,
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: prompt },
+        ],
+        options: { temperature },
+        stream: false,
+      };
+      const data = await proxyLocalRequest(`${baseUrl}/api/chat`, undefined, postBody, 30);
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+      const reply = data?.message?.content || data?.response || "";
+      if (reply) {
+        options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
+        return reply;
+      }
+    } catch (chatErr: any) {
+      console.warn("Ollama /api/chat failed, falling back to /api/generate:", chatErr);
+      // 2. Fallback to /api/generate with 30s timeout
+      try {
+        const genBody = {
+          model,
+          prompt: `${systemInstruction}\n\nUser: ${prompt}\nAssistant:`,
+          options: { temperature },
+          stream: false,
+        };
+        const data = await proxyLocalRequest(`${baseUrl}/api/generate`, undefined, genBody, 30);
+        if (data?.error) {
+          throw new Error(data.error);
+        }
+        const reply = data?.response || data?.message?.content || "";
+        if (reply) {
+          options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
+          return reply;
+        }
+      } catch (genErr: any) {
+        throw new Error(`Ollama error (${model}): ${chatErr?.message || genErr?.message || "unreachable"}`);
+      }
+      throw new Error(`Ollama (${model}) returned empty response: ${chatErr?.message || "empty"}`);
     }
+
+    throw new Error(`Ollama local error: Model ${model} gave no output.`);
   }
 
   public async askGemini(userPrompt: string, options?: GeminiAskOptions): Promise<string> {
@@ -1821,20 +1884,27 @@ Never use destructive commands (rm, del, format).`;
     }
 
     const providers = loadAIProviders();
+    const activeProviderId = localStorage.getItem("angel_active_provider") || "";
     const activeModel = localStorage.getItem("angel_primary_model") || "Auto";
     const autoFailover = localStorage.getItem("angel_ai_failover") !== "false";
     const temperature = parseFloat(localStorage.getItem("angel_brain_temperature") || "0.7");
     const systemInstruction = localStorage.getItem("angel_custom_system_prompt") || DEFAULT_SYSTEM_INSTRUCTION;
 
-    // Find requested target provider
-    let targetProvider = providers.find(
-      (p) =>
-        p.id === activeModel ||
-        p.name.toLowerCase() === activeModel.toLowerCase() ||
-        p.defaultModel === activeModel
-    );
-
-    if (!targetProvider || activeModel === "Auto" || activeModel === "auto-smart") {
+    // 1. Prioritize explicitly selected provider (e.g., "ollama", "gemini", "groq", "openrouter")
+    let targetProvider: AIProviderConfig | undefined;
+    if (activeProviderId && activeProviderId !== "auto") {
+      targetProvider = providers.find((p) => p.id === activeProviderId);
+    }
+    if (!targetProvider && activeModel !== "Auto" && activeModel !== "auto-smart") {
+      targetProvider = providers.find(
+        (p) =>
+          p.id === activeModel ||
+          p.name.toLowerCase() === activeModel.toLowerCase() ||
+          p.defaultModel === activeModel ||
+          (p.availableModels && p.availableModels.includes(activeModel))
+      );
+    }
+    if (!targetProvider) {
       targetProvider = providers.find((p) => p.id === "auto") || providers[0];
     }
 
@@ -1863,8 +1933,12 @@ Never use destructive commands (rm, del, format).`;
 
     const isConfigured = (p: AIProviderConfig) => {
       if (!p.enabled) return false;
-      if (p.id === "ollama" || p.id === "local_lmstudio") {
+      if (p.id === "ollama") {
         return Boolean(p.endpoint && p.endpoint.trim());
+      }
+      if (p.id === "local_lmstudio") {
+        const isExplicit = localStorage.getItem("angel_lmstudio_enabled") === "true";
+        return Boolean(p.enabled && isExplicit && p.endpoint && p.endpoint.trim() && p.status === "verified");
       }
       return extractKeysList(p.apiKey).length > 0;
     };

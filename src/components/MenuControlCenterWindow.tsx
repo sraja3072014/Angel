@@ -601,6 +601,7 @@ export function MenuControlCenterWindow({
     setVoiceTestStatus(`Synthesizing ${lang === "ta" ? "Tamil Neural" : "English"} Audio...`);
     showToast(`Synthesizing ${lang === "ta" ? "Tamil" : "English"} voice...`);
     try {
+      const targetLang = lang === "ta" ? "ta" : "en-IN";
       const voice =
         lang === "ta"
           ? voiceConfig.voicePersona && voiceConfig.voicePersona.startsWith("ta-")
@@ -613,26 +614,49 @@ export function MenuControlCenterWindow({
 
       const base64Audio = await invoke<string>("synthesize_neural_tts", {
         text,
+        lang: targetLang,
         voice,
         ratePercent,
         pitchHz,
       });
 
       setVoiceTestStatus(`Playing ${lang === "ta" ? "Tamil Neural Audio..." : "English Audio..."}`);
-      const audio = new Audio(base64Audio);
+
+      // Decode Base64 to Blob URL for clean and guaranteed audio playback
+      let rawB64 = base64Audio;
+      if (rawB64.startsWith("data:")) {
+        const parts = rawB64.split(",");
+        rawB64 = parts[1] || "";
+      }
+      const binaryStr = atob(rawB64);
+      const len = binaryStr.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: "audio/mp3" });
+      const blobUrl = URL.createObjectURL(blob);
+      const audio = new Audio(blobUrl);
+
       audio.volume = Math.max(0, Math.min(1, (voiceConfig.volume ?? 85) / 100));
       audio.playbackRate = Math.max(0.5, Math.min(2.0, voiceConfig.speed ?? 1.0));
 
       await new Promise<void>((resolve, reject) => {
         audio.onended = () => {
+          URL.revokeObjectURL(blobUrl);
           setVoiceTestStatus(`Completed ${lang === "ta" ? "Tamil Neural" : "English"} playback.`);
+          showToast(`Tamil speech played successfully!`);
           resolve();
         };
         audio.onerror = (e) => {
+          URL.revokeObjectURL(blobUrl);
           setVoiceTestStatus(`Audio playback error.`);
           reject(e);
         };
-        audio.play().catch(reject);
+        audio.play().catch((err) => {
+          URL.revokeObjectURL(blobUrl);
+          reject(err);
+        });
       });
     } catch (err: any) {
       setVoiceTestStatus(`Test failed: ${err.message || String(err)}`);
