@@ -584,6 +584,43 @@ export default function App() {
         } catch {}
       }
 
+      // 1.1 Check 0-Token Self-Learning Action Memory (Live News, System Routines, Learned Recipes)
+      try {
+        const recipeRes = await invoke<{
+          matched: boolean;
+          recipe_id: string;
+          recipe_name: string;
+          result_text: string;
+          execution_time_ms: number;
+        }>("execute_learned_recipe", { userPrompt: prompt });
+
+        if (recipeRes?.matched && recipeRes.result_text) {
+          const recipeMsgs = [
+            ...updatedUserMsgs,
+            {
+              id: assistantMsgId,
+              role: "assistant" as const,
+              text: recipeRes.result_text,
+              actionExecuted: `⚡ Learned Action Memory (${recipeRes.recipe_name} • 0 Tokens • ${recipeRes.execution_time_ms}ms)`,
+              timestamp: formattedTime,
+            },
+          ];
+          setMessages(recipeMsgs);
+          if (activeSessionId) {
+            setSessions((prev) => {
+              const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: recipeMsgs } : s));
+              try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+              return sUpdated;
+            });
+          }
+          // Voice playback
+          voiceRef.current?.speak(recipeRes.result_text, () => setSpeaking(true), () => setSpeaking(false));
+          return;
+        }
+      } catch (recipeErr) {
+        console.warn("Learned recipe check notice:", recipeErr);
+      }
+
       // 1.4 GitHub Reverse-Engineering (REA) Detector
       const ghUrlMatch = prompt.match(/https?:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/i);
       const isReaPrompt =
@@ -748,6 +785,11 @@ NEVER produce any Python (.py) code or dependencies.`;
           try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
           return sUpdated;
         });
+      }
+
+      // Automatically speak completed reply aloud if voice is unmuted
+      if (!voiceMuted) {
+        voiceRef.current?.speak(fullReply, () => setSpeaking(true), () => setSpeaking(false));
       }
     } catch (err: any) {
       const errText = `⚠️ Error processing request: ${err?.message || err}`;
