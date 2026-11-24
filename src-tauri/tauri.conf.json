@@ -19,7 +19,8 @@
         "decorations": false,
         "alwaysOnTop": false,
         "resizable": true,
-        "center": true
+        "center": true,
+        "maximized": true
       }
     ],
     "security": {

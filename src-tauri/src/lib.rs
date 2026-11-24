@@ -54,6 +54,8 @@ fn start_global_hotkey_listener(app_handle: tauri::AppHandle) {
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
                 if msg.message == WM_HOTKEY && msg.w_param == 9999 {
+                    use tauri::Emitter;
+                    let _ = app_handle.emit("angel-summon-copilot", ());
                     if let Some(window) = app_handle.get_webview_window("main") {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
@@ -979,11 +981,107 @@ async fn synthesize_neural_tts(
     .map_err(|e| format!("TTS task error: {e}"))?
 }
 
+#[tauri::command]
+fn get_active_window_context() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let ps_script = r#"
+            $sig = '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int count); [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int processId);'
+            Add-Type -MemberDefinition $sig -Name Win32Utils -Namespace Win32Focus -ErrorAction SilentlyContinue | Out-Null
+            $hwnd = [Win32Focus.Win32Utils]::GetForegroundWindow()
+            $sb = New-Object System.Text.StringBuilder 256
+            [Win32Focus.Win32Utils]::GetWindowText($hwnd, $sb, 256) | Out-Null
+            $title = $sb.ToString()
+            $procId = 0
+            [Win32Focus.Win32Utils]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
+            $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+            $procName = if ($proc) { $proc.ProcessName } else { "Unknown" }
+            $rawName = $procName.ToLower()
+            $friendlyApp = switch -Wildcard ($rawName) {
+                "*winword*" { "MS Word" }
+                "*excel*" { "MS Excel" }
+                "*powerpnt*" { "MS PowerPoint" }
+                "*photoshop*" { "Adobe Photoshop" }
+                "*coreldrw*" { "CorelDRAW" }
+                "*illustrator*" { "Adobe Illustrator" }
+                "*code*" { "VS Code" }
+                "*devenv*" { "Visual Studio" }
+                "*chrome*" { "Google Chrome" }
+                "*msedge*" { "Microsoft Edge" }
+                "*firefox*" { "Firefox" }
+                "*notepad*" { "Notepad" }
+                "*terminal*" { "Windows Terminal" }
+                "*cmd*" { "Command Prompt" }
+                "*powershell*" { "PowerShell" }
+                "*project_angel*" { "Angel AI" }
+                default { if ($proc) { $proc.ProcessName } else { "Active Application" } }
+            }
+            [PSCustomObject]@{
+                app_name = $friendlyApp
+                process_name = "$procName.exe"
+                window_title = $title
+                is_supported_copilot = ($friendlyApp -in @("MS Word", "Adobe Photoshop", "CorelDRAW", "VS Code", "Notepad", "Visual Studio"))
+            } | ConvertTo-Json -Compress
+        "#;
+
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("Failed to get active window context: {e}"))?;
+
+        let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if res.is_empty() {
+            Ok(r#"{"app_name":"Active Application","process_name":"desktop.exe","window_title":"Windows Desktop","is_supported_copilot":false}"#.to_string())
+        } else {
+            Ok(res)
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(r#"{"app_name":"Active Application","process_name":"desktop","window_title":"Active Workspace","is_supported_copilot":false}"#.to_string())
+    }
+}
+
+#[tauri::command]
+fn insert_text_at_active_cursor(text: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let temp_dir = std::env::temp_dir();
+        let buf_path = temp_dir.join("angel_paste_buffer.txt");
+        std::fs::write(&buf_path, text.as_bytes())
+            .map_err(|e| format!("Failed to write paste buffer: {e}"))?;
+
+        let escaped_path = buf_path.to_string_lossy().replace('\\', "\\\\");
+        let ps_cmd = format!(
+            r#"Add-Type -AssemblyName System.Windows.Forms; $txt = [System.IO.File]::ReadAllText('{}', [System.Text.Encoding]::UTF8); [System.Windows.Forms.Clipboard]::SetText($txt); Start-Sleep -Milliseconds 60; [System.Windows.Forms.SendKeys]::SendWait('^v')"#,
+            escaped_path
+        );
+
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps_cmd])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Failed to send paste event: {e}"))?;
+
+        Ok("Text pasted into active application cursor successfully.".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = text;
+        Ok("Text pasted.".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.maximize();
+            }
 
             // 1. Start 24/7 Aegis Folder Watcher
             aegis_av::start_realtime_watcher(app_handle.clone());
@@ -1147,7 +1245,9 @@ pub fn run() {
             speak_tamil_native,
             stop_native_tts,
             prewarm_voice_cache,
-            os_doctor::get_system_health_report
+            os_doctor::get_system_health_report,
+            get_active_window_context,
+            insert_text_at_active_cursor
         ])
         .run(tauri::generate_context!())
         .expect("error while running Project Angel");

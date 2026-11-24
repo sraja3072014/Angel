@@ -40,6 +40,7 @@ import { AngelVoiceEngine } from "./services/voiceEngine";
 import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
 import { HoloEarthStage } from "./components/HoloEarthStage";
+import { CursorCompanionOverlay } from "./components/CursorCompanionOverlay";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
 import { WorkshopStagePanel } from "./components/WorkshopStagePanel";
 import {
@@ -1482,6 +1483,13 @@ NEVER produce any Python (.py) code or dependencies.`;
           </div>
         </div>
       )}
+
+      {/* Floating 3D Cursor-Companion Mini Orb & Active App Co-Pilot */}
+      <CursorCompanionOverlay
+        lastAssistantText={messages.filter((m) => m.role === "assistant").pop()?.text || ""}
+        speaking={speaking}
+        onSendPrompt={(prompt, screenImg) => handleSendMessage(prompt, screenImg)}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Plus,
   Search,
@@ -46,6 +46,19 @@ export function GeminiSidebar({
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [activeItem, setActiveItem] = useState<string>("chat");
+  const [activeTheme, setActiveTheme] = useState<string>(() => {
+    return localStorage.getItem("angel_3d_core_theme") || "quantum_gyro";
+  });
+
+  useEffect(() => {
+    const handleThemeChange = (e: any) => {
+      if (e.detail?.theme) {
+        setActiveTheme(e.detail.theme);
+      }
+    };
+    window.addEventListener("angel-3d-theme-changed", handleThemeChange);
+    return () => window.removeEventListener("angel-3d-theme-changed", handleThemeChange);
+  }, []);
 
   const displayChats = sessions && sessions.length > 0 ? sessions : [];
 
@@ -70,13 +83,39 @@ export function GeminiSidebar({
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           <div className="flex items-center gap-2.5 overflow-hidden">
-            {/* Miniature 3D-styled rotating Earth orb */}
+            {/* Miniature 3D-styled Core Icon synced to selected 3D Core Theme */}
             <div className="relative w-6 h-6 shrink-0 flex items-center justify-center">
-              <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-600 via-emerald-500 to-indigo-600 shadow-[0_0_10px_rgba(6,182,212,0.6)] flex items-center justify-center animate-[spin_12s_linear_infinite] border border-cyan-400/50">
-                <div className="w-2 h-2 rounded-full bg-emerald-300/50 blur-[0.5px]" />
-              </div>
-              {/* Orbital ring */}
-              <div className="absolute inset-0 rounded-full border border-cyan-300/40 rotate-45 scale-110 pointer-events-none" />
+              {activeTheme === "quantum_gyro" && (
+                <div className="w-5 h-5 rounded-full border border-cyan-400/80 animate-[spin_4s_linear_infinite] flex items-center justify-center shadow-[0_0_8px_rgba(34,211,238,0.7)]">
+                  <div className="w-3.5 h-3.5 rounded-full border border-amber-400/80 animate-[spin_2s_linear_infinite_reverse] flex items-center justify-center">
+                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-300 shadow-[0_0_4px_#22d3ee]" />
+                  </div>
+                </div>
+              )}
+
+              {activeTheme === "neural_synapse" && (
+                <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-purple-600 via-indigo-500 to-cyan-500 shadow-[0_0_8px_rgba(168,85,247,0.7)] flex items-center justify-center animate-pulse border border-purple-400/70">
+                  <div className="w-2 h-2 rounded-full bg-white shadow-[0_0_4px_#fff]" />
+                </div>
+              )}
+
+              {activeTheme === "orbital_earth" && (
+                <>
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-cyan-600 via-emerald-500 to-indigo-600 shadow-[0_0_10px_rgba(6,182,212,0.6)] flex items-center justify-center animate-[spin_12s_linear_infinite] border border-cyan-400/50">
+                    <div className="w-2 h-2 rounded-full bg-emerald-300/50 blur-[0.5px]" />
+                  </div>
+                  <div className="absolute inset-0 rounded-full border border-cyan-300/40 rotate-45 scale-110 pointer-events-none" />
+                </>
+              )}
+
+              {activeTheme === "volumetric_hologram" && (
+                <>
+                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-teal-500 via-cyan-400 to-blue-600 shadow-[0_0_8px_rgba(20,184,166,0.7)] flex items-center justify-center border border-teal-300/60 animate-[spin_6s_linear_infinite]">
+                    <div className="w-2 h-2 rounded-full bg-cyan-100 blur-[0.5px]" />
+                  </div>
+                  <div className="absolute inset-0 rounded-full border border-teal-300/40 rotate-12 scale-110 pointer-events-none" />
+                </>
+              )}
             </div>
 
             {!collapsed && (

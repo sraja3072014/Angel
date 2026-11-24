@@ -5,6 +5,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Sliders,
   Brain,
+  Atom,
   Mic,
   Puzzle,
   Database,
@@ -207,6 +208,12 @@ export function MenuControlCenterWindow({
   // TAB 1: GENERAL SETTINGS STATE
   // ==========================================
   const [autoStart, setAutoStart] = useState<boolean>(true);
+  const [coreTheme, setCoreTheme] = useState<string>(() => {
+    return localStorage.getItem("angel_3d_core_theme") || "quantum_gyro";
+  });
+  const [cursorCompanion, setCursorCompanion] = useState<boolean>(() => {
+    return localStorage.getItem("angel_cursor_companion_enabled") === "true";
+  });
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
     const val = localStorage.getItem("angel_earth_opacity");
     return val ? parseFloat(val) : 0.5;
@@ -234,6 +241,28 @@ export function MenuControlCenterWindow({
     );
   };
 
+  const handleSelectCoreTheme = (theme: string) => {
+    setCoreTheme(theme);
+    localStorage.setItem("angel_3d_core_theme", theme);
+    window.dispatchEvent(
+      new CustomEvent("angel-3d-theme-changed", {
+        detail: { theme },
+      })
+    );
+    showToast(`3D Core Theme changed: ${theme.replace('_', ' ').toUpperCase()}`);
+  };
+
+  const handleToggleCursorCompanion = (enable: boolean) => {
+    setCursorCompanion(enable);
+    localStorage.setItem("angel_cursor_companion_enabled", enable.toString());
+    window.dispatchEvent(
+      new CustomEvent("angel-cursor-companion-toggle", {
+        detail: { enabled: enable },
+      })
+    );
+    showToast(enable ? "Floating Cursor Companion Orb Activated" : "Cursor Companion Orb Deactivated");
+  };
+
   const handleToggleAutoStart = async (enable: boolean) => {
     setAutoStart(enable);
     try {
@@ -245,6 +274,8 @@ export function MenuControlCenterWindow({
   };
 
   const handleSaveGeneral = () => {
+    localStorage.setItem("angel_3d_core_theme", coreTheme);
+    localStorage.setItem("angel_cursor_companion_enabled", cursorCompanion.toString());
     localStorage.setItem("angel_earth_opacity", earthOpacity.toString());
     localStorage.setItem("angel_earth_scale", earthScale.toString());
     localStorage.setItem("angel_earth_weather_fx", weatherFx.toString());
@@ -1445,19 +1476,24 @@ export function MenuControlCenterWindow({
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {/* Windows Startup */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
-                    <div className="text-sm font-semibold text-white">Windows Auto-Start</div>
-                    <p className="text-xs text-slate-400">
+                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                    <div className="text-xs font-bold text-white flex items-center justify-between">
+                      <span>Windows Auto-Start</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${autoStart ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
+                        {autoStart ? "ACTIVE" : "OFF"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
                       Launch Angel AI companion silently on Windows 11 boot via HKCU registry.
                     </p>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 pt-1">
                       <button
                         onClick={() => handleToggleAutoStart(true)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                           autoStart
-                            ? "bg-cyan-500 text-slate-950"
+                            ? "bg-cyan-500 text-slate-950 shadow-sm"
                             : "bg-white/5 text-slate-400 hover:text-white"
                         }`}
                       >
@@ -1465,9 +1501,9 @@ export function MenuControlCenterWindow({
                       </button>
                       <button
                         onClick={() => handleToggleAutoStart(false)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
                           !autoStart
-                            ? "bg-rose-600 text-white"
+                            ? "bg-rose-600 text-white shadow-sm"
                             : "bg-white/5 text-slate-400 hover:text-white"
                         }`}
                       >
@@ -1477,22 +1513,194 @@ export function MenuControlCenterWindow({
                   </div>
 
                   {/* Global Hotkey */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
-                    <div className="text-sm font-semibold text-white">Global Summon Hotkey</div>
-                    <p className="text-xs text-slate-400">
-                      Instantly summon or hide the Angel AI HUD from any Windows application.
+                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                    <div className="text-xs font-bold text-white flex items-center justify-between">
+                      <span>Global Summon Hotkey</span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300">
+                        ALWAYS READY
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Instantly summon HUD or Active Co-Pilot from MS Word, Photoshop, VS Code.
                     </p>
                     <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/40 border border-cyan-400/40 font-mono text-xs text-cyan-300 font-bold">
                       <Zap size={14} className="text-cyan-400" />
                       <span>Alt + Space</span>
                     </div>
                   </div>
+
+                  {/* Floating Cursor Companion Orb */}
+                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                    <div className="text-xs font-bold text-white flex items-center justify-between">
+                      <span>Cursor Companion Orb</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${cursorCompanion ? "bg-cyan-500/20 text-cyan-300" : "bg-slate-800 text-slate-400"}`}>
+                        {cursorCompanion ? "ACTIVE" : "OFF"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Mini 3D orb follows mouse with active app badge & cursor paste tool.
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={() => handleToggleCursorCompanion(true)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                          cursorCompanion
+                            ? "bg-cyan-500 text-slate-950 shadow-sm"
+                            : "bg-white/5 text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        Enabled
+                      </button>
+                      <button
+                        onClick={() => handleToggleCursorCompanion(false)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                          !cursorCompanion
+                            ? "bg-slate-700 text-slate-300"
+                            : "bg-white/5 text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        Disabled
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                {/* Ambient 3D Satellite Earth Controls */}
+                {/* 3D CORE THEME SWITCHER (4 SCI-FI CORES) */}
+                <div className="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold text-white flex items-center gap-2">
+                        <Sparkles size={16} className="text-cyan-400" />
+                        <span>3D Core Theme Switcher (4 Interactive Three.js Cores)</span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Seamlessly morph between 4 real-time sci-fi cores with zero page reload.
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-cyan-950/80 border border-cyan-400/40 text-cyan-300">
+                      ACTIVE: {coreTheme.replace('_', ' ').toUpperCase()}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {/* Core 1: Quantum Gyroscope */}
+                    <div
+                      onClick={() => handleSelectCoreTheme("quantum_gyro")}
+                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                        coreTheme === "quantum_gyro"
+                          ? "bg-cyan-950/40 border-cyan-400 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]"
+                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center">
+                            <Atom size={18} className="text-cyan-400" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white">Quantum Gyroscope Core</div>
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-cyan-500/30 text-cyan-300 font-mono">
+                              JARVIS Style
+                            </span>
+                          </div>
+                        </div>
+                        {coreTheme === "quantum_gyro" && <Check size={16} className="text-cyan-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Concentric counter-rotating holographic rings with inner pulsating cyan energy core and orbital particles.
+                      </p>
+                    </div>
+
+                    {/* Core 2: Living Neural Synapse */}
+                    <div
+                      onClick={() => handleSelectCoreTheme("neural_synapse")}
+                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                        coreTheme === "neural_synapse"
+                          ? "bg-purple-950/40 border-purple-400 text-purple-100 shadow-[0_0_15px_rgba(168,85,247,0.25)]"
+                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-purple-500/20 border border-purple-400/40 flex items-center justify-center">
+                            <Brain size={18} className="text-purple-400" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white">Living Neural Synapse</div>
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-purple-500/30 text-purple-300 font-mono">
+                              Cognitive Web
+                            </span>
+                          </div>
+                        </div>
+                        {coreTheme === "neural_synapse" && <Check size={16} className="text-purple-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        110 interconnected synaptic nodes with dynamic lightning filaments that pulse faster during AI thinking and speech.
+                      </p>
+                    </div>
+
+                    {/* Core 3: Satellite Orbital Earth */}
+                    <div
+                      onClick={() => handleSelectCoreTheme("orbital_earth")}
+                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                        coreTheme === "orbital_earth"
+                          ? "bg-emerald-950/40 border-emerald-400 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.25)]"
+                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center">
+                            <Globe size={18} className="text-emerald-400" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white">Satellite Orbital Earth</div>
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-500/30 text-emerald-300 font-mono">
+                              Day/Night Orbit
+                            </span>
+                          </div>
+                        </div>
+                        {coreTheme === "orbital_earth" && <Check size={16} className="text-emerald-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        Orbital Earth with day/night solar lighting, specular ocean reflection, moving clouds, Moon, and ISS station.
+                      </p>
+                    </div>
+
+                    {/* Core 4: Volumetric Hologram */}
+                    <div
+                      onClick={() => handleSelectCoreTheme("volumetric_hologram")}
+                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                        coreTheme === "volumetric_hologram"
+                          ? "bg-teal-950/40 border-teal-400 text-teal-100 shadow-[0_0_15px_rgba(20,184,166,0.25)]"
+                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-lg bg-teal-500/20 border border-teal-400/40 flex items-center justify-center">
+                            <Sparkles size={18} className="text-teal-400" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white">Volumetric Hologram</div>
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-teal-500/30 text-teal-300 font-mono">
+                              Particle Lattice
+                            </span>
+                          </div>
+                        </div>
+                        {coreTheme === "volumetric_hologram" && <Check size={16} className="text-teal-400 shrink-0" />}
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        1,800 undulating waveform particles in a futuristic holographic silhouette with traversing laser scan plane.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ambient 3D Stage Tuning & Visual FX */}
                 <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-4">
                   <div className="text-sm font-semibold text-white flex items-center justify-between">
-                    <span>Ambient 3D Satellite Earth HUD</span>
+                    <span>Ambient 3D Stage HUD Tuning</span>
                     <span className="text-xs font-mono text-cyan-400">HoloEarthStage</span>
                   </div>
 
