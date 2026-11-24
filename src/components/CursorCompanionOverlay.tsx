@@ -57,6 +57,13 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     };
     window.addEventListener("angel-3d-theme-changed", handleThemeChange);
 
+    // Cross-window Tauri event listener for theme change
+    const unlistenTheme = listen<{ theme: string }>("core-theme-changed", (event) => {
+      if (event.payload?.theme) {
+        setActiveTheme(event.payload.theme);
+      }
+    });
+
     // Listen to global hotkey Alt+Space
     const unlisten = listen("angel-summon-copilot", () => {
       setIsOpen(true);
@@ -66,8 +73,18 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
       }
     });
 
+    // Close on Escape key press
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handleClosePopover();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
     return () => {
       window.removeEventListener("angel-3d-theme-changed", handleThemeChange);
+      window.removeEventListener("keydown", handleKeyDown);
+      unlistenTheme.then((f) => f());
       unlisten.then((f) => f());
     };
   }, [isStandaloneWindow]);
@@ -87,6 +104,16 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
       invoke("set_cursor_orb_interactive", { interactive: false }).catch(() => {});
     }
   };
+
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
+    }
+  }, [isOpen]);
 
   const fetchContext = async () => {
     try {
@@ -397,6 +424,7 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
           {/* Prompt Form accepting full Tamil & English pasted text */}
           <form onSubmit={handleQuickSubmit} className="relative flex items-center gap-1.5 pt-1">
             <input
+              ref={inputRef}
               type="text"
               value={promptText}
               onChange={(e) => setPromptText(e.target.value)}

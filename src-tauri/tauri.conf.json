@@ -21,6 +21,19 @@
         "resizable": true,
         "center": true,
         "maximized": true
+      },
+      {
+        "label": "cursor_orb",
+        "title": "Angel Cursor Companion",
+        "url": "/?mode=cursor_orb",
+        "width": 96,
+        "height": 96,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false
       }
     ],
     "security": {

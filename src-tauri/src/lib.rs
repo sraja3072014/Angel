@@ -111,7 +111,7 @@ fn start_global_hotkey_listener(app_handle: tauri::AppHandle) {
                     if let Some(orb_win) = app_handle.get_webview_window("cursor_orb") {
                         let _ = orb_win.show();
                         let _ = orb_win.unminimize();
-                        let _ = orb_win.set_size(tauri::LogicalSize::new(420.0, 340.0));
+                        let _ = orb_win.set_size(tauri::LogicalSize::new(440.0, 340.0));
                         let _ = orb_win.set_ignore_cursor_events(false);
                         let _ = orb_win.set_focus();
                     } else if let Some(window) = app_handle.get_webview_window("main") {
@@ -1262,10 +1262,10 @@ fn set_cursor_orb_interactive(app: tauri::AppHandle, interactive: bool) -> Resul
     if let Some(win) = app.get_webview_window("cursor_orb") {
         let _ = win.set_ignore_cursor_events(!interactive);
         if interactive {
-            let _ = win.set_size(tauri::LogicalSize::new(420.0, 340.0));
+            let _ = win.set_size(tauri::LogicalSize::new(440.0, 340.0));
             let _ = win.set_focus();
         } else {
-            let _ = win.set_size(tauri::LogicalSize::new(100.0, 100.0));
+            let _ = win.set_size(tauri::LogicalSize::new(96.0, 96.0));
         }
     }
     Ok(())
@@ -1553,22 +1553,29 @@ pub fn run() {
             // 3. Start Native Windows Alt + Space Global Hotkey Listener
             start_global_hotkey_listener(app_handle.clone());
 
-            // 3.1 Create System-Wide Transparent Desktop 3D Cursor Orb Window
-            let orb_route = "/?mode=cursor_orb";
-            let orb_builder = WebviewWindowBuilder::new(
-                &app_handle,
-                "cursor_orb",
-                WebviewUrl::App(orb_route.into()),
-            )
-            .title("Angel Cursor Companion")
-            .inner_size(96.0, 96.0)
-            .transparent(true)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false);
+            // 3.1 Setup System-Wide Transparent Desktop 3D Cursor Orb Window
+            let orb_window_opt = if let Some(win) = app.get_webview_window("cursor_orb") {
+                Some(win)
+            } else {
+                let orb_route = "/?mode=cursor_orb";
+                let orb_builder = WebviewWindowBuilder::new(
+                    &app_handle,
+                    "cursor_orb",
+                    WebviewUrl::App(orb_route.into()),
+                )
+                .title("Angel Cursor Companion")
+                .inner_size(96.0, 96.0)
+                .transparent(true)
+                .decorations(false)
+                .shadow(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false);
+                orb_builder.build().ok()
+            };
 
-            if let Ok(orb_win) = orb_builder.build() {
+            if let Some(orb_win) = orb_window_opt {
+                let _ = orb_win.set_shadow(false);
                 let _ = orb_win.set_ignore_cursor_events(true);
                 let _ = orb_win.show();
 
@@ -1582,6 +1589,13 @@ pub fn run() {
                             std::thread::sleep(std::time::Duration::from_millis(16));
                             unsafe {
                                 if GetCursorPos(&mut pt) != 0 {
+                                    // Check if currently expanded as interactive popover
+                                    if let Ok(size) = orb_handle.inner_size() {
+                                        if size.width > 120 {
+                                            // When expanded into Co-Pilot card, don't move with mouse
+                                            continue;
+                                        }
+                                    }
                                     // Offset by +24, +24 so orb does not block user clicks
                                     let target_x = pt.x + 24;
                                     let target_y = pt.y + 24;

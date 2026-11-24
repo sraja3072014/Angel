@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Sliders,
@@ -249,6 +249,7 @@ export function MenuControlCenterWindow({
         detail: { theme },
       })
     );
+    emit("core-theme-changed", { theme }).catch(() => {});
     showToast(`3D Core Theme changed: ${theme.replace('_', ' ').toUpperCase()}`);
   };
 
@@ -260,6 +261,8 @@ export function MenuControlCenterWindow({
         detail: { enabled: enable },
       })
     );
+    emit("cursor-companion-toggle", { enabled: enable }).catch(() => {});
+    invoke("toggle_cursor_orb", { enabled: enable }).catch(() => {});
     showToast(enable ? "Floating Cursor Companion Orb Activated" : "Cursor Companion Orb Deactivated");
   };
 
