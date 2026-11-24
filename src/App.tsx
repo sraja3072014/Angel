@@ -1586,11 +1586,7 @@ NEVER produce any Python (.py) code or dependencies.`;
       )}
 
       {/* Floating 3D Cursor-Companion Mini Orb & Active App Co-Pilot */}
-      <CursorCompanionOverlay
-        lastAssistantText={messages.filter((m) => m.role === "assistant").pop()?.text || ""}
-        speaking={speaking}
-        onSendPrompt={(prompt, screenImg) => handleSendMessage(prompt, screenImg)}
-      />
+      <CursorCompanionOverlay isStandaloneWindow={false} />
     </div>
   );
 }

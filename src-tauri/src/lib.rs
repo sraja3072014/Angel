@@ -33,10 +33,18 @@ struct MSG {
 }
 
 #[cfg(target_os = "windows")]
+#[repr(C)]
+struct POINT {
+    x: i32,
+    y: i32,
+}
+
+#[cfg(target_os = "windows")]
 #[link(name = "user32")]
 unsafe extern "system" {
     fn RegisterHotKey(hWnd: *mut std::ffi::c_void, id: i32, fsModifiers: u32, vk: u32) -> i32;
     fn GetMessageW(lpMsg: *mut MSG, hWnd: *mut std::ffi::c_void, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
+    fn GetCursorPos(lpPoint: *mut POINT) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -98,7 +106,15 @@ fn start_global_hotkey_listener(app_handle: tauri::AppHandle) {
                 if msg.message == WM_HOTKEY && msg.w_param == 9999 {
                     use tauri::Emitter;
                     let _ = app_handle.emit("angel-summon-copilot", ());
-                    if let Some(window) = app_handle.get_webview_window("main") {
+
+                    // If cursor_orb window exists, make it interactive, expand size and focus
+                    if let Some(orb_win) = app_handle.get_webview_window("cursor_orb") {
+                        let _ = orb_win.show();
+                        let _ = orb_win.unminimize();
+                        let _ = orb_win.set_size(tauri::LogicalSize::new(420.0, 340.0));
+                        let _ = orb_win.set_ignore_cursor_events(false);
+                        let _ = orb_win.set_focus();
+                    } else if let Some(window) = app_handle.get_webview_window("main") {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
                         } else {
@@ -1090,6 +1106,110 @@ fn get_active_window_context() -> Result<String, String> {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ActiveAppContextWithSelection {
+    pub app_name: String,
+    pub process_name: String,
+    pub window_title: String,
+    pub is_supported_copilot: bool,
+    pub selected_text: String,
+}
+
+#[tauri::command]
+fn get_active_app_and_selection() -> Result<ActiveAppContextWithSelection, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let ps_script = r#"
+            Add-Type @"
+                using System;
+                using System.Runtime.InteropServices;
+                using System.Text;
+                public class Win32Focus {
+                    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+                    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+                    [DllImport("user32.dll", SetLastError = true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+                }
+"@ -ErrorAction SilentlyContinue
+
+            $hwnd = [Win32Focus]::GetForegroundWindow()
+            $sb = New-Object System.Text.StringBuilder 512
+            [Win32Focus]::GetWindowText($hwnd, $sb, 512) | Out-Null
+            $title = $sb.ToString()
+            $procId = 0
+            [Win32Focus]::GetWindowThreadProcessId($hwnd, [ref]$procId) | Out-Null
+            $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+            $procName = if ($proc) { $proc.ProcessName } else { "Unknown" }
+            $rawName = $procName.ToLower()
+            $friendlyApp = switch -Wildcard ($rawName) {
+                "*winword*" { "MS Word" }
+                "*excel*" { "MS Excel" }
+                "*powerpnt*" { "MS PowerPoint" }
+                "*photoshop*" { "Adobe Photoshop" }
+                "*coreldrw*" { "CorelDRAW" }
+                "*illustrator*" { "Adobe Illustrator" }
+                "*code*" { "VS Code" }
+                "*devenv*" { "Visual Studio" }
+                "*chrome*" { "Google Chrome" }
+                "*msedge*" { "Microsoft Edge" }
+                "*firefox*" { "Firefox" }
+                "*notepad*" { "Notepad" }
+                "*terminal*" { "Windows Terminal" }
+                "*cmd*" { "Command Prompt" }
+                "*powershell*" { "PowerShell" }
+                "*project_angel*" { "Angel AI" }
+                default { if ($proc) { $proc.ProcessName } else { "Active Application" } }
+            }
+
+            # Optional quick non-destructive clipboard selection probe
+            $selected = ""
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+                $rawClip = [System.Windows.Forms.Clipboard]::GetText()
+                if ($rawClip.Length -gt 0 -and $rawClip.Length -lt 2000) {
+                    $selected = $rawClip
+                }
+            }
+
+            [PSCustomObject]@{
+                app_name = $friendlyApp
+                process_name = "$procName.exe"
+                window_title = $title
+                is_supported_copilot = ($friendlyApp -in @("MS Word", "Adobe Photoshop", "CorelDRAW", "VS Code", "Notepad", "Visual Studio", "Google Chrome", "Firefox", "Microsoft Edge"))
+                selected_text = $selected
+            } | ConvertTo-Json -Compress
+        "#;
+
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("Failed to get active window context: {e}"))?;
+
+        let res = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if let Ok(ctx) = serde_json::from_str::<ActiveAppContextWithSelection>(&res) {
+            Ok(ctx)
+        } else {
+            Ok(ActiveAppContextWithSelection {
+                app_name: "Active Application".into(),
+                process_name: "desktop.exe".into(),
+                window_title: "Windows Desktop".into(),
+                is_supported_copilot: true,
+                selected_text: "".into(),
+            })
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(ActiveAppContextWithSelection {
+            app_name: "Active Application".into(),
+            process_name: "desktop".into(),
+            window_title: "Active Workspace".into(),
+            is_supported_copilot: true,
+            selected_text: "".into(),
+        })
+    }
+}
+
 #[tauri::command]
 fn insert_text_at_active_cursor(text: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
@@ -1118,6 +1238,37 @@ fn insert_text_at_active_cursor(text: String) -> Result<String, String> {
         let _ = text;
         Ok("Text pasted.".to_string())
     }
+}
+
+#[tauri::command]
+fn type_text_into_active_app(text: String) -> Result<String, String> {
+    insert_text_at_active_cursor(text)
+}
+
+#[tauri::command]
+fn toggle_cursor_orb(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("cursor_orb") {
+        if enabled {
+            let _ = win.show();
+        } else {
+            let _ = win.hide();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_cursor_orb_interactive(app: tauri::AppHandle, interactive: bool) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("cursor_orb") {
+        let _ = win.set_ignore_cursor_events(!interactive);
+        if interactive {
+            let _ = win.set_size(tauri::LogicalSize::new(420.0, 340.0));
+            let _ = win.set_focus();
+        } else {
+            let _ = win.set_size(tauri::LogicalSize::new(100.0, 100.0));
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -1402,6 +1553,46 @@ pub fn run() {
             // 3. Start Native Windows Alt + Space Global Hotkey Listener
             start_global_hotkey_listener(app_handle.clone());
 
+            // 3.1 Create System-Wide Transparent Desktop 3D Cursor Orb Window
+            let orb_route = "/?mode=cursor_orb";
+            let orb_builder = WebviewWindowBuilder::new(
+                &app_handle,
+                "cursor_orb",
+                WebviewUrl::App(orb_route.into()),
+            )
+            .title("Angel Cursor Companion")
+            .inner_size(96.0, 96.0)
+            .transparent(true)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false);
+
+            if let Ok(orb_win) = orb_builder.build() {
+                let _ = orb_win.set_ignore_cursor_events(true);
+                let _ = orb_win.show();
+
+                // Mouse Tracking Thread (~60fps) following cursor across entire Windows desktop
+                #[cfg(target_os = "windows")]
+                {
+                    let orb_handle = orb_win.clone();
+                    std::thread::spawn(move || {
+                        let mut pt = POINT { x: 0, y: 0 };
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_millis(16));
+                            unsafe {
+                                if GetCursorPos(&mut pt) != 0 {
+                                    // Offset by +24, +24 so orb does not block user clicks
+                                    let target_x = pt.x + 24;
+                                    let target_y = pt.y + 24;
+                                    let _ = orb_handle.set_position(tauri::PhysicalPosition::new(target_x, target_y));
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
             // 4. Background Pre-warm Voice Cache for Sub-10ms Instant Audio
             std::thread::spawn(|| {
                 let cache_dir = get_voice_cache_dir();
@@ -1589,7 +1780,11 @@ pub fn run() {
             list_learned_recipes,
             save_learned_recipe,
             execute_learned_recipe,
-            fetch_live_news
+            fetch_live_news,
+            get_active_app_and_selection,
+            type_text_into_active_app,
+            toggle_cursor_orb,
+            set_cursor_orb_interactive
         ])
         .run(tauri::generate_context!())
         .expect("error while running Project Angel");
