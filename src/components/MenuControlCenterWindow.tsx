@@ -598,66 +598,23 @@ export function MenuControlCenterWindow({
       lang === "ta"
         ? "வணக்கம் ராஜா, நான் ஏஞ்சல் ஏஐ. இப்போது என் தமிழ் குரல் தெளிவாகக் கேட்கிறதா?"
         : "Hello Raja, Angel AI voice calibration is online.";
-    setVoiceTestStatus(`Synthesizing ${lang === "ta" ? "Tamil Neural" : "English"} Audio...`);
+    setVoiceTestStatus(`Synthesizing & Playing ${lang === "ta" ? "Tamil Neural" : "English"} Audio...`);
     showToast(`Synthesizing ${lang === "ta" ? "Tamil" : "English"} voice...`);
     try {
       const targetLang = lang === "ta" ? "ta" : "en-IN";
-      const voice =
-        lang === "ta"
-          ? voiceConfig.voicePersona && voiceConfig.voicePersona.startsWith("ta-")
-            ? voiceConfig.voicePersona
-            : "ta-IN-PallaviNeural"
-          : "en-IN-NeerjaNeural";
+      const vol = Math.max(0, Math.min(1, (voiceConfig.volume ?? 85) / 100));
+      const rate = Math.max(0.5, Math.min(2.0, voiceConfig.speed ?? 1.0));
 
-      const ratePercent = Math.round(((voiceConfig.speed ?? 1.0) - 1.0) * 100);
-      const pitchHz = voiceConfig.pitch ?? 0;
-
-      const base64Audio = await invoke<string>("synthesize_neural_tts", {
+      // Native Windows speaker playback via Rust MediaPlayer
+      await invoke<string>("speak_tamil_native", {
         text,
         lang: targetLang,
-        voice,
-        ratePercent,
-        pitchHz,
+        volume: vol,
+        rate,
       });
 
-      setVoiceTestStatus(`Playing ${lang === "ta" ? "Tamil Neural Audio..." : "English Audio..."}`);
-
-      // Decode Base64 to Blob URL for clean and guaranteed audio playback
-      let rawB64 = base64Audio;
-      if (rawB64.startsWith("data:")) {
-        const parts = rawB64.split(",");
-        rawB64 = parts[1] || "";
-      }
-      const binaryStr = atob(rawB64);
-      const len = binaryStr.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      const blob = new Blob([bytes], { type: "audio/mp3" });
-      const blobUrl = URL.createObjectURL(blob);
-      const audio = new Audio(blobUrl);
-
-      audio.volume = Math.max(0, Math.min(1, (voiceConfig.volume ?? 85) / 100));
-      audio.playbackRate = Math.max(0.5, Math.min(2.0, voiceConfig.speed ?? 1.0));
-
-      await new Promise<void>((resolve, reject) => {
-        audio.onended = () => {
-          URL.revokeObjectURL(blobUrl);
-          setVoiceTestStatus(`Completed ${lang === "ta" ? "Tamil Neural" : "English"} playback.`);
-          showToast(`Tamil speech played successfully!`);
-          resolve();
-        };
-        audio.onerror = (e) => {
-          URL.revokeObjectURL(blobUrl);
-          setVoiceTestStatus(`Audio playback error.`);
-          reject(e);
-        };
-        audio.play().catch((err) => {
-          URL.revokeObjectURL(blobUrl);
-          reject(err);
-        });
-      });
+      setVoiceTestStatus(`Completed ${lang === "ta" ? "Tamil Neural" : "English"} playback.`);
+      showToast(`Tamil speech played successfully!`);
     } catch (err: any) {
       setVoiceTestStatus(`Test failed: ${err.message || String(err)}`);
       showToast(`Voice test error: ${err.message || String(err)}`);

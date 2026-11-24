@@ -102,6 +102,9 @@ export class AngelVoiceEngine {
 
   public stopSpeaking() {
     this.isSpeaking = false;
+    try {
+      invoke("stop_native_tts").catch(() => {});
+    } catch {}
     if (this.currentAudio) {
       try {
         this.currentAudio.pause();
@@ -391,11 +394,19 @@ export class AngelVoiceEngine {
         chosenVoice = "ta-IN-PallaviNeural";
       }
 
-      // 1. If explicit Web Speech is chosen AND text has no Tamil characters
-      if (voiceCfg.ttsEngine === "webspeech" && !hasTamil) {
-        await this.speakWebSpeech(cleanText, false);
-      } else {
-        // 2. High-Fidelity Rust HTTP MP3 TTS Synthesizer
+      // 1. Guaranteed Audible Tamil & English Speech via Rust Native Windows Media Player
+      try {
+        const vol = Math.max(0, Math.min(1, (voiceCfg.volume ?? 85) / 100));
+        const rate = Math.max(0.5, Math.min(2.0, voiceCfg.speed ?? 1.0));
+        await invoke<string>("speak_tamil_native", {
+          text: cleanText,
+          lang: targetLang,
+          volume: vol,
+          rate,
+        });
+      } catch (nativeErr) {
+        console.warn("speak_tamil_native fallback to synthesize_neural_tts:", nativeErr);
+        // Fallback: Web Audio / SAPI
         try {
           const ratePercent = Math.round(((voiceCfg.speed ?? 1.0) - 1.0) * 100);
           const pitchHz = voiceCfg.pitch ?? 0;
@@ -410,7 +421,6 @@ export class AngelVoiceEngine {
           await this.playAudioBase64(base64Audio, voiceCfg);
         } catch (err) {
           console.warn("Neural TTS invocation error:", err);
-          // When Tamil text is present, NEVER fall back to Windows English SAPI!
           if (hasTamil) {
             await this.speakWebSpeech(cleanText, true);
           } else {

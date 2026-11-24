@@ -9,6 +9,7 @@ pub mod voice_bridge;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 use sysinfo::{Pid, System};
 use tauri::{
     menu::{Menu, MenuItem},
@@ -610,6 +611,219 @@ fn url_encode_tts_text(input: &str) -> String {
     encoded
 }
 
+static CURRENT_TTS_PID: AtomicU32 = AtomicU32::new(0);
+
+#[tauri::command]
+fn stop_native_tts() {
+    let pid = CURRENT_TTS_PID.swap(0, Ordering::SeqCst);
+    if pid > 0 {
+        #[cfg(target_os = "windows")]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output();
+        }
+    }
+}
+
+fn fetch_tts_mp3_bytes(clean_text: &str, target_lang: &str) -> Result<Vec<u8>, String> {
+    let words = clean_text.split_whitespace().collect::<Vec<_>>();
+    let mut chunks = Vec::new();
+    let mut current_chunk = String::new();
+    for word in words {
+        if current_chunk.len() + word.len() + 1 > 180 {
+            if !current_chunk.is_empty() {
+                chunks.push(current_chunk);
+                current_chunk = String::new();
+            }
+        }
+        if !current_chunk.is_empty() {
+            current_chunk.push(' ');
+        }
+        current_chunk.push_str(word);
+    }
+    if !current_chunk.is_empty() {
+        chunks.push(current_chunk);
+    }
+
+    if chunks.is_empty() {
+        return Err("No text chunks available for audio synthesis.".into());
+    }
+
+    let temp_dir = std::env::temp_dir();
+    let mut full_audio_bytes = Vec::new();
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let encoded_q = url_encode_tts_text(chunk);
+        let url = format!(
+            "https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl={}&q={}",
+            target_lang, encoded_q
+        );
+
+        let chunk_temp = temp_dir.join(format!(
+            "angel_tts_chunk_{}_{}_{}.mp3",
+            std::process::id(),
+            idx,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+
+        let mut curl_cmd = Command::new("curl.exe");
+        #[cfg(target_os = "windows")]
+        curl_cmd.creation_flags(CREATE_NO_WINDOW);
+
+        curl_cmd
+            .arg("-s")
+            .arg("-S")
+            .arg("-m")
+            .arg("10")
+            .arg("--connect-timeout")
+            .arg("5")
+            .arg("-A")
+            .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .arg(&url)
+            .arg("-o")
+            .arg(&chunk_temp);
+
+        let res = curl_cmd.output();
+        if let Ok(out) = res {
+            if out.status.success() && chunk_temp.exists() {
+                if let Ok(bytes) = std::fs::read(&chunk_temp) {
+                    if bytes.len() > 100 {
+                        full_audio_bytes.extend_from_slice(&bytes);
+                    }
+                }
+                let _ = std::fs::remove_file(&chunk_temp);
+            } else if chunk_temp.exists() {
+                let _ = std::fs::remove_file(&chunk_temp);
+            }
+        }
+    }
+
+    if full_audio_bytes.is_empty() {
+        return Err("Audio synthesis failed to fetch MP3 audio stream.".into());
+    }
+
+    Ok(full_audio_bytes)
+}
+
+#[tauri::command]
+async fn speak_tamil_native(
+    text: String,
+    lang: Option<String>,
+    volume: Option<f64>,
+    rate: Option<f64>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // 1. Stop any currently playing TTS
+        let old_pid = CURRENT_TTS_PID.swap(0, Ordering::SeqCst);
+        if old_pid > 0 {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/PID", &old_pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
+        }
+
+        let clean_text = text
+            .replace("[ACTION:", "")
+            .replace(']', "")
+            .replace('*', "")
+            .replace('#', "")
+            .replace('_', "")
+            .replace('`', "")
+            .trim()
+            .to_string();
+
+        if clean_text.is_empty() {
+            return Err("Empty text provided for speech.".into());
+        }
+
+        let has_tamil = clean_text.chars().any(|c| ('\u{0B80}'..='\u{0BFF}').contains(&c));
+        let target_lang = if has_tamil {
+            "ta"
+        } else if let Some(ref l) = lang {
+            let trimmed = l.trim();
+            if trimmed == "ta" || trimmed == "ta-IN" {
+                "ta"
+            } else if trimmed.starts_with("en") {
+                "en-IN"
+            } else {
+                trimmed
+            }
+        } else {
+            "en-IN"
+        };
+
+        let full_audio_bytes = fetch_tts_mp3_bytes(&clean_text, target_lang)?;
+
+        let temp_dir = std::env::temp_dir();
+        let output_mp3 = temp_dir.join(format!(
+            "angel_tts_output_{}_{}.mp3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        ));
+
+        let _ = std::fs::write(&output_mp3, &full_audio_bytes);
+
+        #[cfg(target_os = "windows")]
+        if output_mp3.exists() {
+            let target_volume = volume.unwrap_or(0.85).clamp(0.0, 1.0);
+            let target_rate = rate.unwrap_or(1.0).clamp(0.5, 2.0);
+            let escaped_path = output_mp3.to_string_lossy().replace('\'', "''");
+
+            let ps_script = format!(
+                r#"
+                Add-Type -AssemblyName presentationCore
+                $player = New-Object System.Windows.Media.MediaPlayer
+                $player.Open([Uri]'{}')
+                $player.Volume = {}
+                $player.SpeedRatio = {}
+                $player.Play()
+                $waited = 0
+                while (-not $player.NaturalDuration.HasTimeSpan -and $waited -lt 50) {{
+                    Start-Sleep -Milliseconds 100
+                    $waited++
+                }}
+                if ($player.NaturalDuration.HasTimeSpan) {{
+                    $durationMs = [int]$player.NaturalDuration.TimeSpan.TotalMilliseconds
+                    Start-Sleep -Milliseconds ($durationMs + 300)
+                }} else {{
+                    Start-Sleep -Seconds 4
+                }}
+                $player.Close()
+                "#,
+                escaped_path, target_volume, target_rate
+            );
+
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args(["-NoProfile", "-Command", &ps_script]);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
+            if let Ok(mut child) = cmd.spawn() {
+                CURRENT_TTS_PID.store(child.id(), Ordering::SeqCst);
+                let _ = child.wait();
+                let _ = CURRENT_TTS_PID.compare_exchange(child.id(), 0, Ordering::SeqCst, Ordering::SeqCst);
+            }
+
+            let _ = std::fs::remove_file(&output_mp3);
+        }
+
+        let b64 = to_base64_string(&full_audio_bytes);
+        Ok(format!("data:audio/mp3;base64,{}", b64))
+    })
+    .await
+    .map_err(|e| format!("Native TTS task error: {e}"))?
+}
+
 #[tauri::command]
 async fn synthesize_neural_tts(
     text: String,
@@ -657,86 +871,7 @@ async fn synthesize_neural_tts(
             "en-IN"
         };
 
-        // Split text cleanly into <= 180 character chunks for Google Neural TTS endpoint
-        let words = clean_text.split_whitespace().collect::<Vec<_>>();
-        let mut chunks = Vec::new();
-        let mut current_chunk = String::new();
-        for word in words {
-            if current_chunk.len() + word.len() + 1 > 180 {
-                if !current_chunk.is_empty() {
-                    chunks.push(current_chunk);
-                    current_chunk = String::new();
-                }
-            }
-            if !current_chunk.is_empty() {
-                current_chunk.push(' ');
-            }
-            current_chunk.push_str(word);
-        }
-        if !current_chunk.is_empty() {
-            chunks.push(current_chunk);
-        }
-
-        if chunks.is_empty() {
-            return Err("No text chunks available for audio synthesis.".into());
-        }
-
-        let temp_dir = std::env::temp_dir();
-        let mut full_audio_bytes = Vec::new();
-
-        for (idx, chunk) in chunks.iter().enumerate() {
-            let encoded_q = url_encode_tts_text(chunk);
-            let url = format!(
-                "https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl={}&q={}",
-                target_lang, encoded_q
-            );
-
-            let chunk_temp = temp_dir.join(format!(
-                "angel_tts_{}_{}_{}.mp3",
-                std::process::id(),
-                idx,
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis()
-            ));
-
-            let mut curl_cmd = Command::new("curl.exe");
-            #[cfg(target_os = "windows")]
-            curl_cmd.creation_flags(CREATE_NO_WINDOW);
-
-            curl_cmd
-                .arg("-s")
-                .arg("-S")
-                .arg("-m")
-                .arg("10")
-                .arg("--connect-timeout")
-                .arg("5")
-                .arg("-A")
-                .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .arg(&url)
-                .arg("-o")
-                .arg(&chunk_temp);
-
-            let res = curl_cmd.output();
-            if let Ok(out) = res {
-                if out.status.success() && chunk_temp.exists() {
-                    if let Ok(bytes) = std::fs::read(&chunk_temp) {
-                        if bytes.len() > 100 {
-                            full_audio_bytes.extend_from_slice(&bytes);
-                        }
-                    }
-                    let _ = std::fs::remove_file(&chunk_temp);
-                } else if chunk_temp.exists() {
-                    let _ = std::fs::remove_file(&chunk_temp);
-                }
-            }
-        }
-
-        if full_audio_bytes.is_empty() {
-            return Err("Audio synthesis failed to fetch MP3 audio stream.".into());
-        }
-
+        let full_audio_bytes = fetch_tts_mp3_bytes(&clean_text, target_lang)?;
         let b64 = to_base64_string(&full_audio_bytes);
         Ok(format!("data:audio/mp3;base64,{}", b64))
     })
@@ -909,6 +1044,8 @@ pub fn run() {
             export_workshop_stl_files,
             send_discord_webhook,
             synthesize_neural_tts,
+            speak_tamil_native,
+            stop_native_tts,
             os_doctor::get_system_health_report
         ])
         .run(tauri::generate_context!())

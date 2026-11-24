@@ -1786,7 +1786,7 @@ Never use destructive commands (rm, del, format).`;
     const baseUrl = provider.endpoint.replace(/\/$/, "");
     const model = provider.defaultModel || "qwen3.5:4b";
 
-    // 1. Try /api/chat with 30s timeout
+    // 1. Try /api/chat with think: false (disables slow chain-of-thought in qwen3.5:4b) and num_predict: 400
     try {
       const postBody = {
         model,
@@ -1794,33 +1794,44 @@ Never use destructive commands (rm, del, format).`;
           { role: "system", content: systemInstruction },
           { role: "user", content: prompt },
         ],
-        options: { temperature },
         stream: false,
+        think: false,
+        options: {
+          num_predict: 400,
+          temperature: temperature ?? 0.7,
+        },
       };
       const data = await proxyLocalRequest(`${baseUrl}/api/chat`, undefined, postBody, 30);
       if (data?.error) {
         throw new Error(data.error);
       }
-      const reply = data?.message?.content || data?.response || "";
+      let rawReply = data?.message?.content || data?.response || "";
+      // Strip any residual <think>...</think> blocks from reasoning models
+      const reply = rawReply.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
       if (reply) {
         options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
         return reply;
       }
     } catch (chatErr: any) {
       console.warn("Ollama /api/chat failed, falling back to /api/generate:", chatErr);
-      // 2. Fallback to /api/generate with 30s timeout
+      // 2. Fallback to /api/generate with think: false and num_predict: 400
       try {
         const genBody = {
           model,
           prompt: `${systemInstruction}\n\nUser: ${prompt}\nAssistant:`,
-          options: { temperature },
           stream: false,
+          think: false,
+          options: {
+            num_predict: 400,
+            temperature: temperature ?? 0.7,
+          },
         };
         const data = await proxyLocalRequest(`${baseUrl}/api/generate`, undefined, genBody, 30);
         if (data?.error) {
           throw new Error(data.error);
         }
-        const reply = data?.response || data?.message?.content || "";
+        let rawReply = data?.response || data?.message?.content || "";
+        const reply = rawReply.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
         if (reply) {
           options?.onChunk?.(reply.replace(/\[ACTION:[^\]]+\]/g, "").trim());
           return reply;
@@ -1908,11 +1919,11 @@ Never use destructive commands (rm, del, format).`;
       targetProvider = providers.find((p) => p.id === "auto") || providers[0];
     }
 
-    // Dynamic Intent-based routing order
+    // Dynamic Intent-based routing order (Cloud first for fast online response, Ollama offline fallback)
     let priorityOrder = [
       "gemini",
-      "openrouter",
       "groq",
+      "openrouter",
       "deepseek",
       "openai",
       "anthropic",
@@ -1922,11 +1933,11 @@ Never use destructive commands (rm, del, format).`;
     ];
 
     if (classification === "Quick Lookup") {
-      priorityOrder = ["groq", "gemini", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Code / Reverse-Engineering") {
-      priorityOrder = ["gemini", "groq", "deepseek", "openai", "anthropic", "openrouter", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "deepseek", "openrouter", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Defensive Security Audit") {
-      priorityOrder = ["gemini", "anthropic", "openai", "groq", "deepseek", "openrouter", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "anthropic", "openai", "deepseek", "openrouter", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Tamil/Tanglish") {
       priorityOrder = ["gemini", "groq", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     }
