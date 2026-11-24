@@ -1205,6 +1205,82 @@ fn save_learned_recipe(recipe: LearnedRecipe) -> Result<String, String> {
     Ok("Learned recipe saved successfully.".to_string())
 }
 
+#[tauri::command]
+async fn fetch_live_news(is_tamil: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let endpoint = if is_tamil {
+            "https://news.google.com/rss?hl=ta&gl=IN&ceid=IN:ta"
+        } else {
+            "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en"
+        };
+
+        let mut cmd = Command::new("curl.exe");
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        cmd.arg("-s")
+            .arg("-m")
+            .arg("6")
+            .arg("--connect-timeout")
+            .arg("4")
+            .arg("-L")
+            .arg("-A")
+            .arg("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .arg(endpoint);
+
+        let output = cmd.output().map_err(|e| format!("Failed to execute news fetcher: {e}"))?;
+        if !output.status.success() {
+            return Err("Google News service temporarily unreachable. Check network.".to_string());
+        }
+
+        let xml_str = String::from_utf8_lossy(&output.stdout);
+        let mut headlines = Vec::new();
+
+        // Extract <item><title>...</title></item>, skipping channel title
+        for item in xml_str.split("<item>").skip(1).take(6) {
+            if let Some(title_start) = item.find("<title>") {
+                if let Some(title_end) = item.find("</title>") {
+                    let raw_title = &item[title_start + 7..title_end];
+                    let clean_title = raw_title
+                        .replace("<![CDATA[", "")
+                        .replace("]]>", "")
+                        .replace("&amp;", "&")
+                        .replace("&quot;", "\"")
+                        .replace("&#39;", "'")
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&nbsp;", " ")
+                        .trim()
+                        .to_string();
+
+                    if !clean_title.is_empty() && clean_title.to_lowercase() != "google news" {
+                        headlines.push(clean_title);
+                    }
+                }
+            }
+        }
+
+        if headlines.is_empty() {
+            return Err("No live news headlines found in current feed.".to_string());
+        }
+
+        let header = if is_tamil {
+            "📰 இன்றைய முக்கிய நேரலை செய்திகள் (Google News Live Feed):"
+        } else {
+            "📰 Today's Live Top Headlines (Google News Live Feed):"
+        };
+
+        let mut formatted = format!("{}\n\n", header);
+        for (i, h) in headlines.iter().enumerate() {
+            formatted.push_str(&format!("{}. {}\n", i + 1, h));
+        }
+
+        Ok(formatted.trim().to_string())
+    })
+    .await
+    .map_err(|e| format!("Live news task error: {e}"))?
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct RecipeExecutionResult {
     pub matched: bool,
@@ -1512,7 +1588,8 @@ pub fn run() {
             insert_text_at_active_cursor,
             list_learned_recipes,
             save_learned_recipe,
-            execute_learned_recipe
+            execute_learned_recipe,
+            fetch_live_news
         ])
         .run(tauri::generate_context!())
         .expect("error while running Project Angel");

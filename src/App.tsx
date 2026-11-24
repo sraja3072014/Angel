@@ -556,6 +556,65 @@ export default function App() {
         return;
       }
 
+      // 1.0 PRIORITY-1 LIVE NEWS INTERCEPTOR (Real-Time Google News RSS • 0 Tokens • Zero Hallucination)
+      const newsKeywords = [
+        "news",
+        "headlines",
+        "செய்தி",
+        "செய்திகள்",
+        "நியூஸ்",
+        "inaikku news",
+        "today news",
+        "latest news",
+        "breaking news",
+        "current news",
+        "tell me news",
+        "daily news",
+      ];
+
+      const isNewsQuery = newsKeywords.some((kw) => {
+        const kwLower = kw.toLowerCase();
+        return promptLower === kwLower || promptLower.includes(kwLower);
+      });
+
+      if (isNewsQuery) {
+        // Detect whether query is in Tamil or Tanglish
+        const isTamilScript = /[\u0B80-\u0BFF]/.test(prompt);
+        const isTanglish =
+          /inaikku|innaiku|enna|sollu|seithi|seythi|tamil|indru|inniku|vanakkam/i.test(prompt);
+        const isTamil = isTamilScript || isTanglish;
+
+        try {
+          const liveNewsText = await invoke<string>("fetch_live_news", { isTamil });
+          if (liveNewsText && liveNewsText.trim().length > 0) {
+            incrementUsageTelemetry("reflex");
+            const newsMsgs = [
+              ...updatedUserMsgs,
+              {
+                id: assistantMsgId,
+                role: "assistant" as const,
+                text: liveNewsText,
+                actionExecuted: `Live Google News RSS (${isTamil ? "Tamil" : "English"} • 0 Tokens)`,
+                timestamp: formattedTime,
+              },
+            ];
+            setMessages(newsMsgs);
+            if (activeSessionId) {
+              setSessions((prev) => {
+                const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: newsMsgs } : s));
+                try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+                return sUpdated;
+              });
+            }
+            // Speak live headlines aloud
+            voiceRef.current?.speak(liveNewsText, () => setSpeaking(true), () => setSpeaking(false));
+            return;
+          }
+        } catch (newsErr) {
+          console.warn("Live news fetcher notice:", newsErr);
+        }
+      }
+
       // 1. Check local Rust OS reflex if in Task mode or standard prompt
       if (workspaceMode === "task") {
         try {
