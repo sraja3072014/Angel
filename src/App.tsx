@@ -40,7 +40,6 @@ import { AngelVoiceEngine } from "./services/voiceEngine";
 import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import { CyberShieldSecuritySuite } from "./components/CyberShieldSecuritySuite";
 import { HoloEarthStage } from "./components/HoloEarthStage";
-import { CursorCompanionOverlay } from "./components/CursorCompanionOverlay";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
 import { WorkshopStagePanel } from "./components/WorkshopStagePanel";
 import {
@@ -1584,9 +1583,6 @@ NEVER produce any Python (.py) code or dependencies.`;
           </div>
         </div>
       )}
-
-      {/* Floating 3D Cursor-Companion Mini Orb & Active App Co-Pilot */}
-      <CursorCompanionOverlay isStandaloneWindow={false} />
     </div>
   );
 }

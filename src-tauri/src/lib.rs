@@ -111,7 +111,7 @@ fn start_global_hotkey_listener(app_handle: tauri::AppHandle) {
                     if let Some(orb_win) = app_handle.get_webview_window("cursor_orb") {
                         let _ = orb_win.show();
                         let _ = orb_win.unminimize();
-                        let _ = orb_win.set_size(tauri::LogicalSize::new(440.0, 340.0));
+                        let _ = orb_win.set_size(tauri::LogicalSize::new(420.0, 310.0));
                         let _ = orb_win.set_ignore_cursor_events(false);
                         let _ = orb_win.set_focus();
                     } else if let Some(window) = app_handle.get_webview_window("main") {
@@ -1262,10 +1262,10 @@ fn set_cursor_orb_interactive(app: tauri::AppHandle, interactive: bool) -> Resul
     if let Some(win) = app.get_webview_window("cursor_orb") {
         let _ = win.set_ignore_cursor_events(!interactive);
         if interactive {
-            let _ = win.set_size(tauri::LogicalSize::new(440.0, 340.0));
+            let _ = win.set_size(tauri::LogicalSize::new(420.0, 310.0));
             let _ = win.set_focus();
         } else {
-            let _ = win.set_size(tauri::LogicalSize::new(96.0, 96.0));
+            let _ = win.set_size(tauri::LogicalSize::new(54.0, 54.0));
         }
     }
     Ok(())
@@ -1564,7 +1564,7 @@ pub fn run() {
                     WebviewUrl::App(orb_route.into()),
                 )
                 .title("Angel Cursor Companion")
-                .inner_size(96.0, 96.0)
+                .inner_size(54.0, 54.0)
                 .transparent(true)
                 .decorations(false)
                 .shadow(false)
@@ -1591,14 +1591,14 @@ pub fn run() {
                                 if GetCursorPos(&mut pt) != 0 {
                                     // Check if currently expanded as interactive popover
                                     if let Ok(size) = orb_handle.inner_size() {
-                                        if size.width > 120 {
+                                        if size.width > 100 {
                                             // When expanded into Co-Pilot card, don't move with mouse
                                             continue;
                                         }
                                     }
-                                    // Offset by +24, +24 so orb does not block user clicks
-                                    let target_x = pt.x + 24;
-                                    let target_y = pt.y + 24;
+                                    // Offset by +22, +22 so orb does not block user clicks
+                                    let target_x = pt.x + 22;
+                                    let target_y = pt.y + 22;
                                     let _ = orb_handle.set_position(tauri::PhysicalPosition::new(target_x, target_y));
                                 }
                             }

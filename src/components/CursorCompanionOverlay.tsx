@@ -28,6 +28,9 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
   });
 
   const [isOpen, setIsOpen] = useState(false);
+  const isOpenRef = useRef(false);
+  isOpenRef.current = isOpen;
+
   const [activeApp, setActiveApp] = useState<ActiveAppContextWithSelection>({
     app_name: "Active Application",
     process_name: "desktop.exe",
@@ -48,8 +51,17 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
   const meshGroupRef = useRef<THREE.Group | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
-  // Listen to theme changes from Menu or storage
+  // Listen to theme changes from Menu or storage + periodic check every 500ms
   useEffect(() => {
+    const checkTheme = () => {
+      const stored = localStorage.getItem("angel_3d_core_theme");
+      if (stored && stored !== activeTheme) {
+        setActiveTheme(stored);
+      }
+    };
+
+    const interval = setInterval(checkTheme, 500);
+
     const handleThemeChange = (e: any) => {
       if (e.detail?.theme) {
         setActiveTheme(e.detail.theme);
@@ -64,12 +76,12 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
       }
     });
 
-    // Listen to global hotkey Alt+Space
+    // Listen to global hotkey Alt+Space (toggle open / close)
     const unlisten = listen("angel-summon-copilot", () => {
-      setIsOpen(true);
-      fetchContext();
-      if (isStandaloneWindow) {
-        invoke("set_cursor_orb_interactive", { interactive: true }).catch(() => {});
+      if (isOpenRef.current) {
+        handleClosePopover();
+      } else {
+        handleOpenPopover();
       }
     });
 
@@ -82,12 +94,13 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     window.addEventListener("keydown", handleKeyDown);
 
     return () => {
+      clearInterval(interval);
       window.removeEventListener("angel-3d-theme-changed", handleThemeChange);
       window.removeEventListener("keydown", handleKeyDown);
       unlistenTheme.then((f) => f());
       unlisten.then((f) => f());
     };
-  }, [isStandaloneWindow]);
+  }, [isStandaloneWindow, activeTheme]);
 
   // Sync window interactivity when opening or closing in standalone mode
   const handleOpenPopover = () => {
@@ -127,14 +140,14 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     } catch {}
   };
 
-  // Real Three.js Miniature Core Rendering (84x84 px)
+  // Real Three.js Miniature Core Rendering (54x54 px)
   useEffect(() => {
     if (!mountRef.current) return;
     const container = mountRef.current;
     container.innerHTML = "";
 
-    const width = 84;
-    const height = 84;
+    const width = 54;
+    const height = 54;
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
@@ -145,6 +158,7 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x000000, 0);
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -333,20 +347,20 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
   };
 
   return (
-    <div className="w-full h-full flex items-center justify-center p-2 select-none font-sans">
+    <div className="w-full h-full flex items-center justify-center p-0 select-none font-sans bg-transparent">
       {!isOpen ? (
-        /* Floating Desktop 3D Orb */
+        /* Floating Compact Desktop 3D Orb (54x54 px) - Zero Square Box, Pure Transparent */
         <div
           onClick={handleOpenPopover}
-          className="cursor-pointer group flex items-center justify-center p-1 rounded-full bg-slate-950/60 hover:bg-slate-950/80 border border-cyan-400/40 hover:border-cyan-300 shadow-[0_0_24px_rgba(6,182,212,0.4)] backdrop-blur-md transition-all hover:scale-105 active:scale-95"
-          title="Angel AI 3D Co-Pilot (Click or Alt+Space)"
+          className="cursor-pointer flex items-center justify-center w-[54px] h-[54px] bg-transparent border-none outline-none shadow-none transition-transform hover:scale-110 active:scale-95"
+          title="Angel AI 3D Co-Pilot (Alt+Space)"
         >
           {/* Three.js Miniature Canvas */}
-          <div ref={mountRef} className="w-[84px] h-[84px] flex items-center justify-center pointer-events-none" />
+          <div ref={mountRef} className="w-[54px] h-[54px] flex items-center justify-center pointer-events-none bg-transparent" />
         </div>
       ) : (
         /* Expanded Interactive Co-Pilot Popover */
-        <div className="w-[400px] max-h-[320px] rounded-2xl bg-slate-950/95 border border-cyan-400/60 backdrop-blur-2xl shadow-[0_0_40px_rgba(34,211,238,0.3)] p-3.5 space-y-2.5 flex flex-col justify-between">
+        <div className="w-[420px] max-h-[310px] rounded-2xl bg-slate-950/95 border border-cyan-400/60 backdrop-blur-2xl shadow-[0_0_40px_rgba(34,211,238,0.3)] p-3.5 space-y-2.5 flex flex-col justify-between">
           {/* Header & Active App Context Pill */}
           <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
             <div className="flex items-center gap-2 min-w-0">
