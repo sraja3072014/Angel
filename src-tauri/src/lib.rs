@@ -613,6 +613,25 @@ fn url_encode_tts_text(input: &str) -> String {
 
 static CURRENT_TTS_PID: AtomicU32 = AtomicU32::new(0);
 
+fn get_voice_cache_dir() -> std::path::PathBuf {
+    let base = std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let dir = base.join("AngelAI").join("voice_cache");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+fn hash_tts_key(text: &str, lang: &str, gender: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    text.trim().to_lowercase().hash(&mut hasher);
+    lang.trim().to_lowercase().hash(&mut hasher);
+    gender.trim().to_lowercase().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 #[tauri::command]
 fn stop_native_tts() {
     let pid = CURRENT_TTS_PID.swap(0, Ordering::SeqCst);
@@ -714,6 +733,7 @@ fn fetch_tts_mp3_bytes(clean_text: &str, target_lang: &str) -> Result<Vec<u8>, S
 async fn speak_tamil_native(
     text: String,
     lang: Option<String>,
+    gender: Option<String>,
     volume: Option<f64>,
     rate: Option<f64>,
 ) -> Result<String, String> {
@@ -760,25 +780,26 @@ async fn speak_tamil_native(
             "en-IN"
         };
 
-        let full_audio_bytes = fetch_tts_mp3_bytes(&clean_text, target_lang)?;
+        let voice_gender = gender.unwrap_or_else(|| "female".to_string());
+        let cache_key = hash_tts_key(&clean_text, target_lang, &voice_gender);
+        let cache_dir = get_voice_cache_dir();
+        let cached_file = cache_dir.join(format!("{}.mp3", cache_key));
 
-        let temp_dir = std::env::temp_dir();
-        let output_mp3 = temp_dir.join(format!(
-            "angel_tts_output_{}_{}.mp3",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
-
-        let _ = std::fs::write(&output_mp3, &full_audio_bytes);
+        // Check persistent disk cache (<15ms instantaneous resolution)
+        let (audio_bytes, playback_path) = if cached_file.exists() && std::fs::metadata(&cached_file).map(|m| m.len()).unwrap_or(0) > 100 {
+            let bytes = std::fs::read(&cached_file).unwrap_or_default();
+            (bytes, cached_file.clone())
+        } else {
+            let downloaded = fetch_tts_mp3_bytes(&clean_text, target_lang)?;
+            let _ = std::fs::write(&cached_file, &downloaded);
+            (downloaded, cached_file.clone())
+        };
 
         #[cfg(target_os = "windows")]
-        if output_mp3.exists() {
+        if playback_path.exists() {
             let target_volume = volume.unwrap_or(0.85).clamp(0.0, 1.0);
             let target_rate = rate.unwrap_or(1.0).clamp(0.5, 2.0);
-            let escaped_path = output_mp3.to_string_lossy().replace('\'', "''");
+            let escaped_path = playback_path.to_string_lossy().replace('\'', "''");
 
             let ps_script = format!(
                 r#"
@@ -813,15 +834,83 @@ async fn speak_tamil_native(
                 let _ = child.wait();
                 let _ = CURRENT_TTS_PID.compare_exchange(child.id(), 0, Ordering::SeqCst, Ordering::SeqCst);
             }
-
-            let _ = std::fs::remove_file(&output_mp3);
         }
 
-        let b64 = to_base64_string(&full_audio_bytes);
+        let b64 = to_base64_string(&audio_bytes);
         Ok(format!("data:audio/mp3;base64,{}", b64))
     })
     .await
     .map_err(|e| format!("Native TTS task error: {e}"))?
+}
+
+#[tauri::command]
+async fn prewarm_voice_cache(
+    gender: Option<String>,
+    _lang: Option<String>,
+) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let voice_gender = gender.unwrap_or_else(|| "female".to_string());
+        let phrases_ta = [
+            "வணக்கம் ராஜா",
+            "நான் ஏஞ்சல் ஏஐ",
+            "உங்களுக்கு என்ன உதவி வேண்டும்?",
+            "கட்டளை ஏற்றுக்கொள்ளப்பட்டது",
+            "செயல்பாடு வெற்றிகரமாக முடிந்தது",
+            "அனைத்து அமைப்புகளும் சரியாக இயங்குகின்றன",
+            "தயாராக உள்ளேன் ராஜா",
+            "ஒரு நிமிடம் ராஜா",
+            "கணினி பாதுகாப்பு எச்சரிக்கை!",
+            "வானிலை மற்றும் செய்திகள் தயாராக உள்ளன",
+            "ஆணையிடுங்கள் ராஜா",
+        ];
+
+        let phrases_en = [
+            "Hello Raja",
+            "I am Angel AI",
+            "How can I help you today?",
+            "Command received",
+            "Task completed successfully",
+            "All systems nominal and secure",
+            "Standing by, Raja",
+            "Processing your request",
+            "Warning, security alert detected",
+            "Welcome back Raja, all cores ready",
+            "At your service, Raja",
+        ];
+
+        let cache_dir = get_voice_cache_dir();
+        let mut cached_count = 0;
+
+        for phrase in phrases_ta {
+            let key = hash_tts_key(phrase, "ta", &voice_gender);
+            let file = cache_dir.join(format!("{}.mp3", key));
+            if !file.exists() || std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0) < 100 {
+                if let Ok(bytes) = fetch_tts_mp3_bytes(phrase, "ta") {
+                    let _ = std::fs::write(&file, &bytes);
+                    cached_count += 1;
+                }
+            } else {
+                cached_count += 1;
+            }
+        }
+
+        for phrase in phrases_en {
+            let key = hash_tts_key(phrase, "en-IN", &voice_gender);
+            let file = cache_dir.join(format!("{}.mp3", key));
+            if !file.exists() || std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0) < 100 {
+                if let Ok(bytes) = fetch_tts_mp3_bytes(phrase, "en-IN") {
+                    let _ = std::fs::write(&file, &bytes);
+                    cached_count += 1;
+                }
+            } else {
+                cached_count += 1;
+            }
+        }
+
+        Ok(cached_count)
+    })
+    .await
+    .map_err(|e| format!("Prewarm task error: {e}"))?
 }
 
 #[tauri::command]
@@ -871,7 +960,18 @@ async fn synthesize_neural_tts(
             "en-IN"
         };
 
-        let full_audio_bytes = fetch_tts_mp3_bytes(&clean_text, target_lang)?;
+        let cache_key = hash_tts_key(&clean_text, target_lang, "female");
+        let cache_dir = get_voice_cache_dir();
+        let cached_file = cache_dir.join(format!("{}.mp3", cache_key));
+
+        let full_audio_bytes = if cached_file.exists() && std::fs::metadata(&cached_file).map(|m| m.len()).unwrap_or(0) > 100 {
+            std::fs::read(&cached_file).unwrap_or_default()
+        } else {
+            let downloaded = fetch_tts_mp3_bytes(&clean_text, target_lang)?;
+            let _ = std::fs::write(&cached_file, &downloaded);
+            downloaded
+        };
+
         let b64 = to_base64_string(&full_audio_bytes);
         Ok(format!("data:audio/mp3;base64,{}", b64))
     })
@@ -1046,6 +1146,7 @@ pub fn run() {
             synthesize_neural_tts,
             speak_tamil_native,
             stop_native_tts,
+            prewarm_voice_cache,
             os_doctor::get_system_health_report
         ])
         .run(tauri::generate_context!())

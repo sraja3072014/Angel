@@ -73,6 +73,7 @@ import {
   saveAIProviders,
   testProviderConnection,
   extractKeysList,
+  fetchGeminiLiveModels,
   CloudStorageConfig,
   loadCloudStorageConfig,
   saveCloudStorageConfig,
@@ -296,6 +297,8 @@ export function MenuControlCenterWindow({
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string; latencyMs?: number }>>({});
   const [scanningOllama, setScanningOllama] = useState<boolean>(false);
   const [showApiKeys, setShowApiKeys] = useState<boolean>(false);
+  const [discoveringGeminiModels, setDiscoveringGeminiModels] = useState<boolean>(false);
+  const [isPrewarmingVoice, setIsPrewarmingVoice] = useState<boolean>(false);
 
   const handleUpdateProvider = (id: string, updates: Partial<AIProviderConfig>) => {
     setProviders((prev) => {
@@ -332,11 +335,59 @@ export function MenuControlCenterWindow({
     );
   };
 
+  const handleDiscoverGeminiModels = async (provider: AIProviderConfig) => {
+    const keys = extractKeysList(provider.apiKey);
+    const activeKey = keys[0] || localStorage.getItem("angel_gemini_key") || "";
+    if (!activeKey) {
+      showToast("Please enter a Google Gemini API key first.");
+      return;
+    }
+    setDiscoveringGeminiModels(true);
+    try {
+      const res = await fetchGeminiLiveModels(activeKey);
+      handleUpdateProvider(provider.id, {
+        availableModels: res.models,
+        defaultModel: res.autoSelected,
+        status: "ready",
+      });
+      setSelectedModel(res.autoSelected);
+      localStorage.setItem("angel_primary_model", res.autoSelected);
+      showToast(`Discovered ${res.models.length} live Gemini models! Auto-selected: ${res.autoSelected}`);
+    } catch (err: any) {
+      showToast(`Gemini model discovery failed: ${err?.message || err}`);
+    } finally {
+      setDiscoveringGeminiModels(false);
+    }
+  };
+
+  const handlePrewarmVoiceCache = async () => {
+    setIsPrewarmingVoice(true);
+    try {
+      const gender = voiceConfig.voiceGender || (voiceConfig.voicePersona?.includes("Valluvar") ? "male" : "female");
+      const lang = voiceConfig.languageMode || "auto";
+      const result = await invoke<string>("prewarm_voice_cache", { gender, lang });
+      showToast(`Offline Voice Pack: ${result}`);
+    } catch (err: any) {
+      showToast(`Voice cache prewarm failed: ${err?.message || err}`);
+    } finally {
+      setIsPrewarmingVoice(false);
+    }
+  };
+
   const handleTestProvider = async (provider: AIProviderConfig) => {
-    if (provider.id === "openrouter") {
+    if (provider.id === "freellmapi") {
       const keys = extractKeysList(provider.apiKey);
       if (keys.length === 0) {
         const msg = "FreeLLMAPI requires an API key (freellmapi-...). Paste your key above.";
+        setTestResults((prev) => ({ ...prev, [provider.id]: { ok: false, message: msg } }));
+        showToast(msg);
+        return;
+      }
+    }
+    if (provider.id === "openrouter") {
+      const keys = extractKeysList(provider.apiKey);
+      if (keys.length === 0) {
+        const msg = "OpenRouter requires an API key (sk-or-v1-...). Paste your key above.";
         setTestResults((prev) => ({ ...prev, [provider.id]: { ok: false, message: msg } }));
         showToast(msg);
         return;
@@ -1620,7 +1671,8 @@ export function MenuControlCenterWindow({
                               {p.id === "deepseek" && <Cpu size={16} className="text-blue-400" />}
                               {p.id === "anthropic" && <Sparkles size={16} className="text-indigo-400" />}
                               {p.id === "github" && <GitMerge size={16} className="text-purple-400" />}
-                              {p.id === "openrouter" && <Globe size={16} className="text-teal-400" />}
+                              {p.id === "freellmapi" && <Server size={16} className="text-teal-400" />}
+                              {p.id === "openrouter" && <Globe size={16} className="text-sky-400" />}
                               {p.id === "ollama" && <HardDrive size={16} className="text-emerald-400" />}
                               {p.id === "local_lmstudio" && <Server size={16} className="text-sky-400" />}
                             </div>
@@ -1693,8 +1745,8 @@ export function MenuControlCenterWindow({
                       </div>
                     </div>
 
-                    {/* Multi-Line API Keys Auto-Rotator (Cloud) */}
-                    {isCloud && (
+                    {/* Multi-Line API Keys Auto-Rotator (Cloud & FreeLLMAPI) */}
+                    {(isCloud || activeProvider.id === "freellmapi") && (
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
                           <label className="font-semibold text-slate-200 flex items-center gap-2">
@@ -1733,8 +1785,10 @@ export function MenuControlCenterWindow({
                               })
                             }
                             placeholder={
-                              activeProvider.id === "openrouter"
+                              activeProvider.id === "freellmapi"
                                 ? "freellmapi-xxxxxxxxxxxxxxxxxxxxxxxx\n(Paste multiple keys here — one key per line)"
+                                : activeProvider.id === "openrouter"
+                                ? "sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxx\n(Paste multiple keys here — one key per line)"
                                 : "sk-...\nsk-...\n(Paste multiple keys here — one key per line)"
                             }
                             className="w-full p-2.5 rounded-xl bg-black/60 border border-white/15 font-mono text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 transition"
@@ -1760,8 +1814,10 @@ export function MenuControlCenterWindow({
 
                         <div className="text-[11px] text-slate-400 flex items-center justify-between">
                           <span>
-                            {activeProvider.id === "openrouter"
+                            {activeProvider.id === "freellmapi"
                               ? "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)"
+                              : activeProvider.id === "openrouter"
+                              ? "OpenRouter Cloud Free Models — 100+ Free & Premium AI models."
                               : "One key per line — rotated automatically to dodge rate limits."}
                           </span>
                           {!showApiKeys && activeProvider.apiKey.trim() && (
@@ -1772,7 +1828,7 @@ export function MenuControlCenterWindow({
                     )}
 
                     {/* FreeLLMAPI Gateway Endpoint URL & Fetch Router Models */}
-                    {activeProvider.id === "openrouter" && (
+                    {activeProvider.id === "freellmapi" && (
                       <div className="space-y-1.5 pt-1">
                         <label className="text-xs font-semibold text-slate-200">
                           Gateway Endpoint URL (Port 31415)
@@ -1806,7 +1862,7 @@ export function MenuControlCenterWindow({
                     )}
 
                     {/* Local Endpoint & Auto-Scan (Local) */}
-                    {isLocal && (
+                    {isLocal && activeProvider.id !== "freellmapi" && (
                       <div className="space-y-1.5">
                         <label className="text-xs font-semibold text-slate-200">
                           {activeProvider.name} Base URL / Endpoint
@@ -1840,8 +1896,9 @@ export function MenuControlCenterWindow({
                     {isRouter && (() => {
                       const priorityOrder = [
                         "gemini",
-                        "openrouter",
                         "groq",
+                        "freellmapi",
+                        "openrouter",
                         "deepseek",
                         "openai",
                         "anthropic",
@@ -1905,9 +1962,29 @@ export function MenuControlCenterWindow({
                     {/* Model Dropdown & Test Connection Row */}
                     <div className="pt-2 space-y-2 border-t border-white/10">
                       <div>
-                        <label className="text-xs font-semibold text-slate-200 mb-1 block">
-                          Model
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-xs font-semibold text-slate-200">
+                            Model
+                          </label>
+                          {activeProvider.id === "gemini" && (
+                            <div className="flex items-center gap-2">
+                              {activeProvider.availableModels && activeProvider.availableModels.length > 0 && (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-cyan-950/80 border border-cyan-400/40 text-cyan-300">
+                                  Auto-Detected Live Models ({activeProvider.availableModels.length} available) • Auto-Selected: {activeProvider.defaultModel}
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDiscoverGeminiModels(activeProvider)}
+                                disabled={discoveringGeminiModels}
+                                className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-[10px] font-bold flex items-center gap-1 transition disabled:opacity-50 shadow-sm"
+                              >
+                                <RefreshCw size={10} className={discoveringGeminiModels ? "animate-spin" : ""} />
+                                <span>{discoveringGeminiModels ? "Detecting..." : "Auto-Detect Live Models"}</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         {isRouter ? (
                           <div className="w-full px-3 py-2 rounded-xl bg-black/60 border border-white/15 text-xs font-mono text-cyan-300 flex items-center justify-between">
                             <span>Dynamic Priority Routing (Auto Failover across configured brains)</span>
@@ -2742,6 +2819,94 @@ export function MenuControlCenterWindow({
                       <div className="text-[10px] text-slate-400 mt-1">
                         Fully offline local ONNX Piper neural speech with zero internet requirement.
                       </div>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Voice Gender & Offline Voice Pack Caching */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-semibold text-white flex items-center gap-2">
+                        <Sparkles size={15} className="text-cyan-400" />
+                        <span>Voice Gender & Offline Disk Cache Prewarmer</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        Select synthesis persona & prewarm instant &lt;15ms voice cache in %APPDATA%\AngelAI\voice_cache
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handlePrewarmVoiceCache}
+                      disabled={isPrewarmingVoice}
+                      className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500/20 to-teal-500/20 hover:from-cyan-500/30 hover:to-teal-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-bold flex items-center gap-2 transition disabled:opacity-50 shrink-0 shadow-sm"
+                    >
+                      <DownloadCloud size={14} className={isPrewarmingVoice ? "animate-bounce text-cyan-400" : "text-cyan-400"} />
+                      <span>{isPrewarmingVoice ? "Prewarming Cache..." : "Download & Cache Offline Voice Pack"}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVoiceConfig((prev) => ({
+                          ...prev,
+                          voiceGender: "female",
+                          voicePersona: "ta-IN-PallaviNeural",
+                        }))
+                      }
+                      className={`p-3 rounded-xl border text-left transition flex items-center justify-between ${
+                        (voiceConfig.voiceGender || "female") === "female"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div>
+                        <div className="text-xs font-bold flex items-center gap-2">
+                          <span>Female Voice Persona</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-pink-500/20 text-pink-300">
+                            Pallavi / Neerja
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          High-fidelity natural female speech (Tamil & Indian English)
+                        </p>
+                      </div>
+                      {(voiceConfig.voiceGender || "female") === "female" && (
+                        <Check size={16} className="text-cyan-400 shrink-0 ml-2" />
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVoiceConfig((prev) => ({
+                          ...prev,
+                          voiceGender: "male",
+                          voicePersona: "ta-IN-ValluvarNeural",
+                        }))
+                      }
+                      className={`p-3 rounded-xl border text-left transition flex items-center justify-between ${
+                        voiceConfig.voiceGender === "male"
+                          ? "bg-cyan-500/20 border-cyan-400/80 text-cyan-100 shadow-sm shadow-cyan-500/20"
+                          : "bg-black/20 border-white/10 text-slate-300 hover:border-white/20"
+                      }`}
+                    >
+                      <div>
+                        <div className="text-xs font-bold flex items-center gap-2">
+                          <span>Male Voice Persona</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-300">
+                            Valluvar / Guy
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Deep & authoritative classical male speech
+                        </p>
+                      </div>
+                      {voiceConfig.voiceGender === "male" && (
+                        <Check size={16} className="text-cyan-400 shrink-0 ml-2" />
+                      )}
                     </button>
                   </div>
                 </div>

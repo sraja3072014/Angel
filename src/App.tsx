@@ -75,8 +75,8 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Layout & Navigation State
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Layout & Navigation State (Collapsed by default for clean 3D Satellite Earth view)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [activeModal, setActiveModal] = useState<{ type: "menu" | "security"; tab: string } | null>(null);
   const [showGetAppModal, setShowGetAppModal] = useState(false);
   const [temporaryChat, setTemporaryChat] = useState(false);

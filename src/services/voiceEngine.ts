@@ -7,7 +7,8 @@ export interface AngelVoiceConfig {
   vadTimeout: number; // 800 - 2500ms, default 1400
   languageMode: "auto" | "ta-IN" | "en-IN"; // default "auto"
   ttsEngine: "edge" | "multimodal" | "webspeech" | "piper_sapi"; // default "edge"
-  voicePersona: "ta-IN-PallaviNeural" | "ta-IN-ValluvarNeural" | "en-IN-NeerjaNeural" | "en-GB-SoniaNeural"; // default "ta-IN-PallaviNeural"
+  voicePersona: "ta-IN-PallaviNeural" | "ta-IN-ValluvarNeural" | "en-IN-NeerjaNeural" | "en-GB-SoniaNeural" | "en-IN-PrabhatNeural"; // default "ta-IN-PallaviNeural"
+  voiceGender: "female" | "male"; // default "female"
   volume: number; // 0 - 100, default 85
   speed: number; // 0.5 - 2.0, default 1.0
   pitch: number; // -20 - +20, default 0
@@ -19,6 +20,7 @@ export const DEFAULT_VOICE_CONFIG: AngelVoiceConfig = {
   languageMode: "auto",
   ttsEngine: "edge",
   voicePersona: "ta-IN-PallaviNeural",
+  voiceGender: "female",
   volume: 85,
   speed: 1.0,
   pitch: 0,
@@ -56,6 +58,7 @@ export class AngelVoiceEngine {
   private vadAnimationId: number | null = null;
 
   private speechRecognition: any = null;
+  private currentSpeechSessionId = 0;
 
   private onWakeDetected?: () => void;
   private onCommandRecognized: (text: string) => void;
@@ -101,6 +104,7 @@ export class AngelVoiceEngine {
   }
 
   public stopSpeaking() {
+    this.currentSpeechSessionId++;
     this.isSpeaking = false;
     try {
       invoke("stop_native_tts").catch(() => {});
@@ -374,6 +378,9 @@ export class AngelVoiceEngine {
       return;
     }
 
+    this.currentSpeechSessionId++;
+    const sessionId = this.currentSpeechSessionId;
+
     this.isSpeaking = true;
     onStart?.();
 
@@ -383,67 +390,77 @@ export class AngelVoiceEngine {
         return;
       }
 
-      const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
       const voiceCfg = loadAngelVoiceConfig();
+      const vol = Math.max(0, Math.min(1, (voiceCfg.volume ?? 85) / 100));
+      const rate = Math.max(0.5, Math.min(2.0, voiceCfg.speed ?? 1.0));
+      const gender = voiceCfg.voiceGender || (voiceCfg.voicePersona?.includes("Valluvar") || voiceCfg.voicePersona?.includes("Prabhat") ? "male" : "female");
 
-      // Determine target language and voice
-      const isTamilMode = hasTamil || voiceCfg.languageMode === "ta-IN";
-      const targetLang = isTamilMode ? "ta" : "en-IN";
-      let chosenVoice: string = voiceCfg.voicePersona || (isTamilMode ? "ta-IN-PallaviNeural" : "en-IN-NeerjaNeural");
-      if (isTamilMode && !chosenVoice.startsWith("ta-")) {
-        chosenVoice = "ta-IN-PallaviNeural";
-      }
+      // Split into sentence-level chunks for immediate microsecond streaming speech
+      const rawSentences = cleanText.match(/[^.!?।\n]+[.!?।\n]*/g);
+      const sentences = rawSentences && rawSentences.length > 0
+        ? rawSentences.map((s) => s.trim()).filter((s) => s.length > 0)
+        : [cleanText];
 
-      // 1. Guaranteed Audible Tamil & English Speech via Rust Native Windows Media Player
-      try {
-        const vol = Math.max(0, Math.min(1, (voiceCfg.volume ?? 85) / 100));
-        const rate = Math.max(0.5, Math.min(2.0, voiceCfg.speed ?? 1.0));
-        await invoke<string>("speak_tamil_native", {
-          text: cleanText,
-          lang: targetLang,
-          volume: vol,
-          rate,
-        });
-      } catch (nativeErr) {
-        console.warn("speak_tamil_native fallback to synthesize_neural_tts:", nativeErr);
-        // Fallback: Web Audio / SAPI
+      for (let i = 0; i < sentences.length; i++) {
+        if (this.currentSpeechSessionId !== sessionId || this.isMuted) break;
+        const sentence = sentences[i];
+        const hasTamil = /[\u0B80-\u0BFF]/.test(sentence);
+        const targetLang = hasTamil || voiceCfg.languageMode === "ta-IN" ? "ta" : "en-IN";
+
+        // Prewarm / prefetch subsequent sentence in parallel into disk cache
+        if (i + 1 < sentences.length) {
+          const nextSentence = sentences[i + 1];
+          const nextHasTamil = /[\u0B80-\u0BFF]/.test(nextSentence);
+          const nextLang = nextHasTamil || voiceCfg.languageMode === "ta-IN" ? "ta" : "en-IN";
+          invoke("synthesize_neural_tts", {
+            text: nextSentence,
+            lang: nextLang,
+            voice: nextHasTamil
+              ? gender === "male" ? "ta-IN-ValluvarNeural" : "ta-IN-PallaviNeural"
+              : gender === "male" ? "en-IN-PrabhatNeural" : "en-IN-NeerjaNeural",
+          }).catch(() => {});
+        }
+
+        // 1. Guaranteed Audible Speech via Native Windows Media Player (<15ms from disk cache)
         try {
-          const ratePercent = Math.round(((voiceCfg.speed ?? 1.0) - 1.0) * 100);
-          const pitchHz = voiceCfg.pitch ?? 0;
-          const base64Audio = await invoke<string>("synthesize_neural_tts", {
-            text: cleanText,
+          await invoke<string>("speak_tamil_native", {
+            text: sentence,
             lang: targetLang,
-            voice: chosenVoice,
-            ratePercent,
-            pitchHz,
+            gender,
+            volume: vol,
+            rate,
           });
+        } catch (nativeErr) {
+          console.warn("speak_tamil_native fallback to synthesize_neural_tts:", nativeErr);
+          // Fallback: Web Audio / SAPI
+          try {
+            const chosenVoice = hasTamil
+              ? gender === "male" ? "ta-IN-ValluvarNeural" : "ta-IN-PallaviNeural"
+              : gender === "male" ? "en-IN-PrabhatNeural" : (voiceCfg.voicePersona || "en-IN-NeerjaNeural");
+            const ratePercent = Math.round(((voiceCfg.speed ?? 1.0) - 1.0) * 100);
+            const pitchHz = voiceCfg.pitch ?? 0;
+            const base64Audio = await invoke<string>("synthesize_neural_tts", {
+              text: sentence,
+              lang: targetLang,
+              voice: chosenVoice,
+              ratePercent,
+              pitchHz,
+            });
 
-          await this.playAudioBase64(base64Audio, voiceCfg);
-        } catch (err) {
-          console.warn("Neural TTS invocation error:", err);
-          if (hasTamil) {
-            await this.speakWebSpeech(cleanText, true);
-          } else {
-            try {
-              await invoke("speak_offline_tts", { text: cleanText, isTamil: false });
-            } catch {
-              await this.speakWebSpeech(cleanText, false);
-            }
+            await this.playAudioBase64(base64Audio, voiceCfg);
+          } catch {
+            await this.speakWebSpeech(sentence, hasTamil);
           }
         }
       }
     } catch (outerErr) {
       console.warn("Voice speak error:", outerErr);
-      const hasTamil = /[\u0B80-\u0BFF]/.test(cleanText);
-      if (hasTamil) {
-        await this.speakWebSpeech(cleanText, true);
-      } else {
-        await this.speakWebSpeech(cleanText, false);
-      }
     } finally {
-      this.isSpeaking = false;
-      onEnd?.();
-      this.resumeListeningIfActive();
+      if (this.currentSpeechSessionId === sessionId) {
+        this.isSpeaking = false;
+        onEnd?.();
+        this.resumeListeningIfActive();
+      }
     }
   }
 

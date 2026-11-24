@@ -166,9 +166,9 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "</> CODE GEN"],
   },
   {
-    id: "openrouter",
-    name: "Free LLM API",
-    category: "cloud",
+    id: "freellmapi",
+    name: "FreeLLMAPI",
+    category: "local",
     apiKey: "",
     endpoint: "http://127.0.0.1:31415/v1/chat/completions",
     defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
@@ -176,12 +176,33 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
       "meta-llama/llama-3.3-70b-instruct:free",
       "google/gemma-2-9b-it:free",
       "qwen/qwen-2.5-72b-instruct:free",
+      "deepseek/deepseek-r1:free",
     ],
     enabled: true,
     status: "missing_key",
-    description: "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)",
+    description: "FreeLLMAPI Local Gateway at http://127.0.0.1:31415 — Zero Cost.",
     consoleUrl: "http://127.0.0.1:31415",
-    capabilities: ["≋ STREAMING", "🆓 ZERO COST", "</> CODE GEN"],
+    capabilities: ["⚡ LOCAL GATEWAY", "🆓 ZERO COST", "</> CODE GEN", "≋ STREAMING"],
+  },
+  {
+    id: "openrouter",
+    name: "OpenRouter",
+    category: "cloud",
+    apiKey: "",
+    endpoint: "https://openrouter.ai/api/v1/chat/completions",
+    defaultModel: "meta-llama/llama-3.3-70b-instruct:free",
+    availableModels: [
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "google/gemma-2-9b-it:free",
+      "qwen/qwen-2.5-72b-instruct:free",
+      "deepseek/deepseek-r1:free",
+      "meta-llama/llama-3.2-3b-instruct:free",
+    ],
+    enabled: true,
+    status: "missing_key",
+    description: "OpenRouter Cloud Free Models — 100+ Free & Premium AI models.",
+    consoleUrl: "https://openrouter.ai/keys",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "🆓 FREE MODELS", "</> CODE GEN"],
   },
   {
     id: "ollama",
@@ -210,6 +231,76 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     capabilities: ["⚡ LOCAL ENDPOINT", "🔒 100% PRIVATE", "≋ STREAMING", "</> CODE GEN"],
   },
 ];
+
+export async function fetchGeminiLiveModels(apiKey: string): Promise<{ models: string[]; autoSelected: string }> {
+  const trimmed = apiKey ? apiKey.trim() : "";
+  const fallbackModels = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"];
+  if (!trimmed) {
+    return {
+      models: fallbackModels,
+      autoSelected: "gemini-2.0-flash",
+    };
+  }
+
+  try {
+    const res = await fetchWithTimeout(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(trimmed)}`,
+      { method: "GET" },
+      8000
+    );
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const rawList: any[] = data.models || [];
+    const contentModels = rawList
+      .filter((m) => {
+        const methods: string[] = m.supportedGenerationMethods || [];
+        return methods.includes("generateContent");
+      })
+      .map((m) => (m.name || "").replace(/^models\//, ""))
+      .filter((m) => m && !m.includes("embedding") && !m.includes("aqa"));
+
+    if (contentModels.length === 0) {
+      return {
+        models: fallbackModels,
+        autoSelected: "gemini-2.0-flash",
+      };
+    }
+
+    // Rank candidates: fast flash models first, then pro models
+    const priorityCandidates = [
+      "gemini-2.0-flash",
+      "gemini-2.5-flash",
+      "gemini-1.5-flash",
+      "gemini-2.5-pro",
+      "gemini-1.5-pro",
+    ];
+
+    let autoSelected = "";
+    for (const cand of priorityCandidates) {
+      if (contentModels.includes(cand)) {
+        autoSelected = cand;
+        break;
+      }
+    }
+    if (!autoSelected) {
+      const flashMatch = contentModels.find((m) => m.toLowerCase().includes("flash"));
+      autoSelected = flashMatch || contentModels[0];
+    }
+
+    return {
+      models: contentModels,
+      autoSelected,
+    };
+  } catch (e) {
+    console.warn("Failed to fetch live Gemini models:", e);
+    return {
+      models: fallbackModels,
+      autoSelected: "gemini-2.0-flash",
+    };
+  }
+}
 
 export async function fetchWithTimeout(
   url: string,
@@ -339,6 +430,36 @@ export function loadAIProviders(): AIProviderConfig[] {
       } catch {}
     }
 
+    // Migration: separate legacy openrouter into freellmapi & pure openrouter
+    const legacyOpenRouter = storedProviders.find((p) => p.id === "openrouter");
+    const existingFreeLlm = storedProviders.find((p) => p.id === "freellmapi");
+    if (legacyOpenRouter && !existingFreeLlm) {
+      if (
+        legacyOpenRouter.endpoint?.includes("127.0.0.1:31415") ||
+        legacyOpenRouter.apiKey?.includes("freellmapi-") ||
+        legacyOpenRouter.name?.toLowerCase().includes("freellmapi")
+      ) {
+        storedProviders.push({
+          ...legacyOpenRouter,
+          id: "freellmapi",
+          name: "FreeLLMAPI",
+          category: "local",
+          endpoint: legacyOpenRouter.endpoint || "http://127.0.0.1:31415/v1/chat/completions",
+          description: "FreeLLMAPI Local Gateway at http://127.0.0.1:31415 — Zero Cost.",
+          consoleUrl: "http://127.0.0.1:31415",
+          capabilities: ["⚡ LOCAL GATEWAY", "🆓 ZERO COST", "</> CODE GEN", "≋ STREAMING"],
+        });
+        legacyOpenRouter.endpoint = "https://openrouter.ai/api/v1/chat/completions";
+        legacyOpenRouter.name = "OpenRouter";
+        legacyOpenRouter.category = "cloud";
+        legacyOpenRouter.description = "OpenRouter Cloud Free Models — 100+ Free & Premium AI models.";
+        legacyOpenRouter.consoleUrl = "https://openrouter.ai/keys";
+        if (legacyOpenRouter.apiKey?.includes("freellmapi-")) {
+          legacyOpenRouter.apiKey = "";
+        }
+      }
+    }
+
     const merged: AIProviderConfig[] = [];
     for (const def of DEFAULT_AI_PROVIDERS) {
       const existing = storedProviders.find((p) => p.id === def.id);
@@ -351,37 +472,48 @@ export function loadAIProviders(): AIProviderConfig[] {
             ? existing.availableModels
             : def.availableModels;
 
-        // Auto-migrate stale Gemini models to gemini-2.5-pro
+        // Auto-migrate stale Gemini models to gemini-2.0-flash / gemini-2.5-pro
         if (def.id === "gemini") {
-          if (!defModel || defModel.includes("3.8") || defModel.includes("3.5") || defModel === "gemini-2.5-flash") {
-            defModel = "gemini-2.5-pro";
+          if (!defModel || defModel.includes("3.8") || defModel.includes("3.5") || defModel === "gemini-2.5-flash-preview") {
+            defModel = "gemini-2.0-flash";
           }
-          availModels = ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"];
+          availModels = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"];
         }
 
-        // Auto-migrate Free LLM API to FreeLLMAPI Unified Router default gateway endpoint (127.0.0.1:31415)
-        if (def.id === "openrouter") {
+        if (def.id === "freellmapi") {
           let curEndpoint = existing.endpoint || def.endpoint;
           if (!curEndpoint || curEndpoint.includes("openrouter.ai")) {
             curEndpoint = "http://127.0.0.1:31415/v1/chat/completions";
-          }
-          availModels = [
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemma-2-9b-it:free",
-            "qwen/qwen-2.5-72b-instruct:free",
-          ];
-          if (!availModels.includes(defModel)) {
-            defModel = "meta-llama/llama-3.3-70b-instruct:free";
           }
           merged.push({
             ...def,
             ...existing,
             endpoint: curEndpoint,
-            description: "FreeLLMAPI Unified LLM Router (Local Gateway at http://127.0.0.1:31415)",
+            category: "local",
+            description: "FreeLLMAPI Local Gateway at http://127.0.0.1:31415 — Zero Cost.",
             consoleUrl: "http://127.0.0.1:31415",
             capabilities: def.capabilities,
             defaultModel: defModel,
-            availableModels: existing.availableModels && existing.availableModels.length > 0 ? existing.availableModels : availModels,
+            availableModels: availModels,
+          });
+          continue;
+        }
+
+        if (def.id === "openrouter") {
+          let curEndpoint = existing.endpoint || def.endpoint;
+          if (!curEndpoint || curEndpoint.includes("127.0.0.1:31415")) {
+            curEndpoint = "https://openrouter.ai/api/v1/chat/completions";
+          }
+          merged.push({
+            ...def,
+            ...existing,
+            endpoint: curEndpoint,
+            category: "cloud",
+            description: "OpenRouter Cloud Free Models — 100+ Free & Premium AI models.",
+            consoleUrl: "https://openrouter.ai/keys",
+            capabilities: def.capabilities,
+            defaultModel: defModel,
+            availableModels: availModels,
           });
           continue;
         }
@@ -498,8 +630,9 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       const all = loadAIProviders();
       const priorityOrder = [
         "gemini",
-        "openrouter",
         "groq",
+        "freellmapi",
+        "openrouter",
         "deepseek",
         "openai",
         "anthropic",
@@ -613,16 +746,28 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
     if (provider.id === "gemini") {
       if (!activeKey) return { ok: false, message: "Gemini API key is required" };
       const trimmedKey = activeKey.trim();
-      const rawTarget = (provider.defaultModel || "gemini-2.5-pro").replace(/^(models\/)+/, "").trim();
+
+      // Auto-discover live models
+      let liveModels: string[] = [];
+      let autoModel = provider.defaultModel;
+      try {
+        const liveRes = await fetchGeminiLiveModels(trimmedKey);
+        liveModels = liveRes.models;
+        if (!autoModel || autoModel.includes("3.8") || autoModel === "gemini-2.5-flash-preview") {
+          autoModel = liveRes.autoSelected;
+        }
+      } catch {}
+
+      const rawTarget = (autoModel || "gemini-2.0-flash").replace(/^(models\/)+/, "").trim();
       const targetModel =
-        rawTarget.includes("3.8") || rawTarget === "gemini-2.5-flash"
-          ? "gemini-2.5-pro"
+        rawTarget.includes("3.8") || rawTarget === "gemini-2.5-flash-preview"
+          ? "gemini-2.0-flash"
           : rawTarget;
 
       const modelsToTry = [targetModel];
-      if (!modelsToTry.includes("gemini-2.5-pro")) modelsToTry.push("gemini-2.5-pro");
       if (!modelsToTry.includes("gemini-2.0-flash")) modelsToTry.push("gemini-2.0-flash");
-      if (!modelsToTry.includes("gemini-1.5-pro")) modelsToTry.push("gemini-1.5-pro");
+      if (!modelsToTry.includes("gemini-2.5-flash")) modelsToTry.push("gemini-2.5-flash");
+      if (!modelsToTry.includes("gemini-2.5-pro")) modelsToTry.push("gemini-2.5-pro");
       if (!modelsToTry.includes("gemini-1.5-flash")) modelsToTry.push("gemini-1.5-flash");
 
       let lastErrMessage = "";
@@ -643,8 +788,9 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           if (res.ok) {
             return {
               ok: true,
-              message: modelName === targetModel ? `Connected • ${latencyMs}ms` : `Connected (${modelName} fallback) • ${latencyMs}ms`,
+              message: modelName === targetModel ? `Connected • ${latencyMs}ms (${modelName})` : `Connected (${modelName} fallback) • ${latencyMs}ms`,
               latencyMs,
+              models: liveModels.length > 0 ? liveModels : undefined,
             };
           }
           const err = await res.json().catch(() => ({}));
@@ -667,8 +813,9 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
             const latencyMs = Math.round(performance.now() - startTime);
             return {
               ok: true,
-              message: modelName === targetModel ? `Connected • ${latencyMs}ms` : `Connected (${modelName} fallback) • ${latencyMs}ms`,
+              message: modelName === targetModel ? `Connected • ${latencyMs}ms (${modelName})` : `Connected (${modelName} fallback) • ${latencyMs}ms`,
               latencyMs,
+              models: liveModels.length > 0 ? liveModels : undefined,
             };
           } catch (e: any) {
             lastErrMessage = e?.message || "SDK error";
@@ -741,7 +888,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
       }
     }
 
-    if (provider.id === "openrouter") {
+    if (provider.id === "freellmapi") {
       if (!activeKey || !activeKey.trim()) {
         return {
           ok: false,
@@ -778,7 +925,7 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
             ok: true,
             message:
               routerModels.length > 0
-                ? `Connected • ${latencyMs}ms (${routerModels.length} router models)`
+                ? `Connected • ${latencyMs}ms (${routerModels.length} models available)`
                 : `Connected • ${latencyMs}ms`,
             latencyMs,
             models: routerModels.length > 0 ? routerModels : undefined,
@@ -794,7 +941,53 @@ export async function testProviderConnection(provider: AIProviderConfig): Promis
           models: routerModels.length > 0 ? routerModels : undefined,
         };
       } catch (err: any) {
-        return { ok: false, message: `Gateway error: ${err?.message || err}` };
+        return { ok: false, message: `FreeLLMAPI Gateway error: ${err?.message || err}` };
+      }
+    }
+
+    if (provider.id === "openrouter") {
+      if (!activeKey || !activeKey.trim()) {
+        return {
+          ok: false,
+          message: "OpenRouter requires an API key (sk-or-v1-...). Paste your key above.",
+        };
+      }
+      const trimmedKey = activeKey.trim();
+      const targetUrl = provider.endpoint.includes("/chat/completions")
+        ? provider.endpoint
+        : `${provider.endpoint.replace(/\/$/, "")}/chat/completions`;
+
+      try {
+        const res = await fetchWithTimeout(
+          targetUrl,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${trimmedKey}`,
+              "HTTP-Referer": "https://angel-ai.local",
+              "X-Title": "Angel AI",
+            },
+            body: JSON.stringify({
+              model: provider.defaultModel || "meta-llama/llama-3.3-70b-instruct:free",
+              messages: [{ role: "user", content: "ping" }],
+              max_tokens: 5,
+            }),
+          },
+          8000
+        );
+        const latencyMs = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return {
+            ok: true,
+            message: `Connected • ${latencyMs}ms (OpenRouter Cloud)`,
+            latencyMs,
+          };
+        }
+        const err = await res.json().catch(() => ({}));
+        return { ok: false, message: err?.error?.message || `HTTP ${res.status}` };
+      } catch (err: any) {
+        return { ok: false, message: `OpenRouter error: ${err?.message || err}` };
       }
     }
 
@@ -1642,10 +1835,17 @@ Never use destructive commands (rm, del, format).`;
       targetUrl = `${targetUrl.replace(/\/$/, "")}/chat/completions`;
     }
 
-    if (provider.id === "openrouter") {
+    if (provider.id === "freellmapi") {
       const validKey = candidateKeys.find((k) => k && k.trim());
       if (!validKey) {
         throw new Error("FreeLLMAPI requires an API key (freellmapi-...). Paste your key above.");
+      }
+    }
+
+    if (provider.id === "openrouter") {
+      const validKey = candidateKeys.find((k) => k && k.trim());
+      if (!validKey) {
+        throw new Error("OpenRouter requires an API key (sk-or-v1-...). Paste your key above.");
       }
     }
 
@@ -1657,7 +1857,7 @@ Never use destructive commands (rm, del, format).`;
       }
 
       // If local endpoint (FreeLLMAPI 127.0.0.1:31415, LM Studio, etc.), route via Rust proxy to bypass WebView2 CORS
-      if (isLocalEndpoint(targetUrl) || provider.id === "openrouter" || provider.id === "local_lmstudio") {
+      if (isLocalEndpoint(targetUrl) || provider.id === "freellmapi" || provider.id === "local_lmstudio") {
         try {
           const postBody = {
             model: provider.defaultModel,
@@ -1923,6 +2123,7 @@ Never use destructive commands (rm, del, format).`;
     let priorityOrder = [
       "gemini",
       "groq",
+      "freellmapi",
       "openrouter",
       "deepseek",
       "openai",
@@ -1933,13 +2134,13 @@ Never use destructive commands (rm, del, format).`;
     ];
 
     if (classification === "Quick Lookup") {
-      priorityOrder = ["gemini", "groq", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "freellmapi", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Code / Reverse-Engineering") {
-      priorityOrder = ["gemini", "groq", "deepseek", "openrouter", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "deepseek", "freellmapi", "openrouter", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Defensive Security Audit") {
-      priorityOrder = ["gemini", "groq", "anthropic", "openai", "deepseek", "openrouter", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "anthropic", "openai", "deepseek", "freellmapi", "openrouter", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Tamil/Tanglish") {
-      priorityOrder = ["gemini", "groq", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["gemini", "groq", "freellmapi", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     }
 
     const isConfigured = (p: AIProviderConfig) => {
