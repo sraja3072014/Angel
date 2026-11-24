@@ -397,9 +397,9 @@ fn open_security_suite(app: tauri::AppHandle, initial_tab: Option<String>) -> Re
         "security-suite",
         WebviewUrl::App(route.into()),
     )
-    .title("Project Angel — K7 Security & OS Doctor Suite")
-    .inner_size(960.0, 660.0)
-    .min_inner_size(840.0, 560.0)
+    .title("Project Angel — CyberShield Command Center & OS Doctor")
+    .inner_size(1020.0, 700.0)
+    .min_inner_size(880.0, 600.0)
     .transparent(true)
     .decorations(false)
     .resizable(true)
@@ -1226,6 +1226,8 @@ pub fn run() {
             os_doctor::apply_defensive_hardening,
             os_doctor::scan_active_ports_and_processes,
             os_doctor::inspect_file_forensics,
+            os_doctor::update_threat_definitions,
+            os_doctor::unlock_and_repair_path,
             plugin_forge::plugin_forge_list,
             plugin_forge::plugin_forge_save,
             plugin_forge::forge_new_skill,

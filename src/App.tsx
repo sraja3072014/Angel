@@ -38,7 +38,7 @@ import "./App.css";
 import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
 import { AngelVoiceEngine } from "./services/voiceEngine";
 import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
-import { SecuritySuiteWindow } from "./components/SecuritySuiteWindow";
+import { CyberShieldSecuritySuite } from "./components/CyberShieldSecuritySuite";
 import { HoloEarthStage } from "./components/HoloEarthStage";
 import { CursorCompanionOverlay } from "./components/CursorCompanionOverlay";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
@@ -1423,11 +1423,11 @@ NEVER produce any Python (.py) code or dependencies.`;
         </div>
       )}
 
-      {/* K7 Security & OS Doctor Suite Glass Modal Overlay */}
+      {/* Angel CyberShield Command Center Glass Modal Overlay */}
       {activeModal?.type === "security" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5 bg-black/70 backdrop-blur-xl animate-in fade-in duration-150">
           <div className="w-full h-full max-w-5xl max-h-[92vh] rounded-3xl overflow-hidden shadow-2xl border border-cyan-400/40 relative">
-            <SecuritySuiteWindow
+            <CyberShieldSecuritySuite
               initialTab={activeModal.tab}
               onClose={() => setActiveModal(null)}
             />
