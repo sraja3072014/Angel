@@ -28,6 +28,20 @@
 
 ---
 
+### 🚀 Latest Architecture & Feature Update (Nov 26, 2026)
+
+- **100% Zero-Python Native Stack**: Powered strictly by **Tauri v2 + Rust**, **React 19 + TypeScript**, **Tailwind CSS**, **Three.js**, and **Lucide Icons** with `CREATE_NO_WINDOW = 0x08000000` on all Windows child processes (zero terminal flashes) and app-wide invisible scrollbars (`scrollbar-width: none`, `::-webkit-scrollbar { display: none }`).
+- **Clean 6-Section Menu Control Center**:
+  1. **General**: Personal assistant profile, custom Boss greeting, Daily Briefing & Smart Reminders, Wellness Break Timer (`30m / 45m / 60m / Off`), live logs, and 2D Animated Companion Engine (8 states, lip-sync, cursor tracking).
+  2. **AI Brain**: Structured 2-table provider hub separating **Online Brain (Cloud Heavy Engine)** (`Antigravity`, `Google Gemini`, `DeepSeek`, `Groq`, `Anthropic Claude`, `GitHub Copilot`, `OpenRouter`, `OpenAI / Codex`) from **Offline & Local Engine** (`Ollama`, `FreeLLMAPI`, `Local LLM`), with Smart Auto-Routing and live verified model sync.
+  3. **Avatar & Voice**: Natural-paced Tamil / Tanglish / English neural & Web Speech synthesis with clause-aware breathing pauses, VAD mic tuning, and voice persona controls.
+  4. **CyberShield**: Native **Angel CyberShield** CyberSecurity & OS Doctor window with folder/drive threat scanner, quarantine vault, and firewall lockdown.
+  5. **Tools**: Installed MCP & Zero-Python tools, GitHub-to-Tool converter, and Smart Project Tool Advisor.
+  6. **Settings & Support**: 8 organized sub-tabs for **Windows Options**, **Themes** (`Windows 11 Acrylic` / `Dark Glassmorphism`, `4 Interactive Three.js Cores` with unified `0.5x–1.8x` scale control), **Language** (`English / தமிழ்`), **Multi-Cloud** (Supabase + On-Demand GitHub Backup), **AI Memory**, **Cross-Device**, **AI Usage & Cost**, and **Support & Diagnostics**.
+- **Dashboard & Universal Autonomous Agent**: Clean HUD header/sidebar, working Global Search, bottom User Profile auth, structured Library category boxes (`Images`, `2D Work`, `3D Work`, `Animation Work`, `3D Workspace`), inline **Weather & Reminders / Code Builder / App Co-Pilot** action cards, and a 4-tool **Universal Autonomous Agent** (`exec_shell`, `read_file`, `write_file`, `ui_action`) with live step pills.
+
+---
+
 ## 2. Quick Start & Installation
 
 ### Prerequisites

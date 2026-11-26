@@ -1313,28 +1313,17 @@ fn show_copilot_popup(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn toggle_cursor_orb(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("copilot_popup") {
-        if enabled {
-            let _ = win.show();
-        } else {
-            let _ = win.hide();
-        }
+fn toggle_cursor_orb(app: tauri::AppHandle, _enabled: bool) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("cursor_orb") {
+        let _ = win.hide();
     }
     Ok(())
 }
 
 #[tauri::command]
-fn set_cursor_orb_interactive(app: tauri::AppHandle, interactive: bool) -> Result<(), String> {
-    if let Some(win) = app.get_webview_window("copilot_popup") {
-        let _ = win.set_ignore_cursor_events(!interactive);
-        if interactive {
-            let _ = win.set_size(tauri::LogicalSize::new(450.0, 330.0));
-            let _ = win.show();
-            let _ = win.set_focus();
-        } else {
-            let _ = win.hide();
-        }
+fn set_cursor_orb_interactive(app: tauri::AppHandle, _interactive: bool) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("cursor_orb") {
+        let _ = win.hide();
     }
     Ok(())
 }
@@ -1769,6 +1758,112 @@ async fn run_github_backup(commit_message: Option<String>) -> Result<String, Str
     .map_err(|e| format!("Backup worker error: {e}"))?
 }
 
+#[tauri::command]
+fn write_generated_component(file_name: String, content: String) -> Result<String, String> {
+    let trimmed = file_name.trim();
+    if trimmed.is_empty()
+        || trimmed.contains("..")
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || !trimmed.ends_with(".tsx")
+    {
+        return Err("Invalid component filename; must be a clean <Name>.tsx".to_string());
+    }
+    let stem = trimmed.trim_end_matches(".tsx");
+    if stem.is_empty() || !stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err("Filename must contain only alphanumeric, '-' or '_' characters".to_string());
+    }
+
+    let repo_root = resolve_repo_root();
+    let gen_dir = repo_root.join("src").join("components").join("generated");
+    std::fs::create_dir_all(&gen_dir)
+        .map_err(|e| format!("Failed to create generated directory: {e}"))?;
+
+    let target_path = gen_dir.join(trimmed);
+    std::fs::write(&target_path, content.as_bytes())
+        .map_err(|e| format!("Failed to write component file: {e}"))?;
+
+    Ok(format!("src/components/generated/{trimmed}"))
+}
+
+#[tauri::command]
+async fn agent_exec_shell(command: String) -> Result<serde_json::Value, String> {
+    let trimmed = command.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Shell command cannot be empty".to_string());
+    }
+    let lower = trimmed.to_lowercase();
+    let blocked = [
+        "format ",
+        "format-volume",
+        "clear-disk",
+        "rd /s /q c:\\",
+        "rmdir /s /q c:\\",
+        "del /s /q c:\\windows",
+        "remove-item -recurse -force c:\\",
+    ];
+    if blocked.iter().any(|b| lower.contains(b)) {
+        return Err("Blocked destructive disk/system command by Angel Safety Guard".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &trimmed]);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let output = cmd
+            .output()
+            .map_err(|e| format!("Failed to execute PowerShell: {e}"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Ok(serde_json::json!({
+            "ok": output.status.success(),
+            "stdout": stdout,
+            "stderr": stderr,
+        }))
+    })
+    .await
+    .map_err(|e| format!("Shell worker error: {e}"))?
+}
+
+#[tauri::command]
+fn agent_read_file(path: String) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("File path cannot be empty".to_string());
+    }
+    let candidate = std::path::PathBuf::from(trimmed);
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        resolve_repo_root().join(candidate)
+    };
+    std::fs::read_to_string(&resolved)
+        .map_err(|e| format!("Failed to read '{}': {e}", resolved.display()))
+}
+
+#[tauri::command]
+fn agent_write_file(path: String, content: String) -> Result<String, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("File path cannot be empty".to_string());
+    }
+    let candidate = std::path::PathBuf::from(trimmed);
+    let resolved = if candidate.is_absolute() {
+        candidate
+    } else {
+        resolve_repo_root().join(candidate)
+    };
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent dirs: {e}"))?;
+    }
+    std::fs::write(&resolved, content.as_bytes())
+        .map_err(|e| format!("Failed to write '{}': {e}", resolved.display()))?;
+    Ok(resolved.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1813,6 +1908,12 @@ pub fn run() {
             if let Some(copilot_win) = copilot_window_opt {
                 let _ = copilot_win.set_shadow(false);
                 let _ = copilot_win.hide();
+            }
+
+            // Ensure any legacy cursor_orb window is closed/hidden on startup
+            if let Some(orb_win) = app.get_webview_window("cursor_orb") {
+                let _ = orb_win.hide();
+                let _ = orb_win.close();
             }
 
             // 3.2 Initialize Phase 1 Desktop Companion Avatar (angel-pet) & 3D Desktop Companion (companion_avatar)
@@ -2054,6 +2155,10 @@ pub fn run() {
             companion_avatar::get_global_cursor_and_window_rect,
             companion_avatar::toggle_main_dashboard_window,
             get_git_backup_status,
+            write_generated_component,
+            agent_exec_shell,
+            agent_read_file,
+            agent_write_file,
             run_github_backup
         ])
         .run(tauri::generate_context!())

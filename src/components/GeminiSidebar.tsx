@@ -4,7 +4,6 @@ import {
   Search,
   Layers,
   Sparkles,
-  CalendarClock,
   GraduationCap,
   Sliders,
   MessageSquare,
@@ -30,6 +29,11 @@ interface GeminiSidebarProps {
   currentChatId?: string | null;
   sessions?: ChatSession[];
   onSelectSession?: (session: ChatSession) => void;
+  onOpenLibrary?: () => void;
+  onOpenSearch?: () => void;
+  onOpenAccountModal?: () => void;
+  userName?: string;
+  userSubtitle?: string;
 }
 
 export function GeminiSidebar({
@@ -42,6 +46,11 @@ export function GeminiSidebar({
   currentChatId,
   sessions,
   onSelectSession,
+  onOpenLibrary,
+  onOpenSearch,
+  onOpenAccountModal,
+  userName = "Raja",
+  userSubtitle = "Sovereign • Online",
 }: GeminiSidebarProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearchModal, setShowSearchModal] = useState(false);
@@ -153,15 +162,16 @@ export function GeminiSidebar({
           <button
             onClick={() => {
               setActiveItem("search");
-              setShowSearchModal(!showSearchModal);
+              if (onOpenSearch) onOpenSearch();
+              else setShowSearchModal(!showSearchModal);
             }}
-            title="Search chat"
+            title="Search"
             className={`flex items-center gap-3 rounded-xl hover:bg-white/10 text-xs font-medium text-slate-300 hover:text-white transition ${
               collapsed ? "p-2.5 justify-center" : "px-3 py-2"
             } ${activeItem === "search" ? "bg-white/10 text-white" : ""}`}
           >
             <Search size={16} className="text-slate-400 shrink-0" />
-            {!collapsed && <span>Search chat</span>}
+            {!collapsed && <span>Search</span>}
           </button>
 
           <button
@@ -181,7 +191,8 @@ export function GeminiSidebar({
           <button
             onClick={() => {
               setActiveItem("library");
-              onSelectPrompt?.("Show saved library templates, code canvases, and pinned prompts.");
+              if (onOpenLibrary) onOpenLibrary();
+              else onSelectPrompt?.("Show saved library templates, code canvases, and pinned prompts.");
             }}
             title="Library"
             className={`flex items-center gap-3 rounded-xl hover:bg-white/10 text-xs font-medium text-slate-300 hover:text-white transition ${
@@ -208,30 +219,16 @@ export function GeminiSidebar({
 
           <button
             onClick={() => {
-              setActiveItem("scheduled");
-              onSelectPrompt?.("List all scheduled background autonomous tasks and active timers.");
-            }}
-            title="Scheduled Tasks"
-            className={`flex items-center gap-3 rounded-xl hover:bg-white/10 text-xs font-medium text-slate-300 hover:text-white transition ${
-              collapsed ? "p-2.5 justify-center" : "px-3 py-2"
-            } ${activeItem === "scheduled" ? "bg-white/10 text-white" : ""}`}
-          >
-            <CalendarClock size={16} className="text-sky-400 shrink-0" />
-            {!collapsed && <span>Scheduled</span>}
-          </button>
-
-          <button
-            onClick={() => {
               setActiveItem("education");
               onSelectPrompt?.("Teach me step-by-step how Angel AI executes local Rust reflexes with zero terminal flashes.");
             }}
-            title="Interactive Learning"
+            title="Study / Learning"
             className={`flex items-center gap-3 rounded-xl hover:bg-white/10 text-xs font-medium text-slate-300 hover:text-white transition ${
               collapsed ? "p-2.5 justify-center" : "px-3 py-2"
             } ${activeItem === "education" ? "bg-white/10 text-white" : ""}`}
           >
             <GraduationCap size={16} className="text-indigo-400 shrink-0" />
-            {!collapsed && <span>Learn</span>}
+            {!collapsed && <span>Study / Learning</span>}
           </button>
         </nav>
 
@@ -309,15 +306,17 @@ export function GeminiSidebar({
           {!collapsed && <span className="truncate">Menu</span>}
         </button>
 
-        {/* User Profile Badge */}
-        <div
-          className={`flex items-center gap-3 rounded-xl bg-white/5 border border-white/10 transition ${
+        {/* User Profile Tile (Sign In / Sign Out / Switch Account) */}
+        <button
+          onClick={onOpenAccountModal}
+          title="Account: Sign In / Sign Out / Switch Account"
+          className={`w-full text-left flex items-center gap-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition ${
             collapsed ? "p-2 justify-center" : "px-3 py-2"
           }`}
         >
           <div className="relative">
             <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-cyan-500 to-indigo-500 text-slate-950 font-black text-xs flex items-center justify-center shadow-md">
-              R
+              {userName.charAt(0).toUpperCase()}
             </div>
             <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-slate-950" />
           </div>
@@ -325,13 +324,13 @@ export function GeminiSidebar({
           {!collapsed && (
             <div className="overflow-hidden">
               <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
-                <span>Raja</span>
+                <span>{userName}</span>
                 <CheckCircle2 size={12} className="text-cyan-400" />
               </div>
-              <div className="text-[10px] text-emerald-400 font-mono">Sovereign • Online</div>
+              <div className="text-[10px] text-emerald-400 font-mono truncate">{userSubtitle}</div>
             </div>
           )}
-        </div>
+        </button>
       </div>
     </aside>
   );

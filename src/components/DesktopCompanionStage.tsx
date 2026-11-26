@@ -729,6 +729,17 @@ export function DesktopCompanionStage() {
             <RotateCcw size={13} />
             <span>Reset Desktop Position</span>
           </button>
+
+          <button
+            onClick={() => {
+              setMenuPos(null);
+              localStorage.setItem("angel_desktop_companion_enabled", "false");
+              invoke("set_companion_visible", { visible: false }).catch(() => {});
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-rose-500/20 text-rose-300 text-left"
+          >
+            <span>Hide Companion</span>
+          </button>
         </div>
       )}
     </div>

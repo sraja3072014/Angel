@@ -88,7 +88,7 @@ pub fn init_companion_avatar(app_handle: tauri::AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(true)
+        .visible(false)
         .build()
         .ok()
     };
@@ -99,7 +99,7 @@ pub fn init_companion_avatar(app_handle: tauri::AppHandle) {
         let start_x = (wr - 470).max(wl);
         let start_y = (wb - 550).max(wt);
         let _ = win.set_position(tauri::PhysicalPosition::new(start_x, start_y));
-        let _ = win.show();
+        let _ = win.hide();
     }
 }
 

@@ -681,12 +681,12 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
 
   return (
     <div className="h-screen w-screen p-2.5 flex items-center justify-center bg-transparent select-none overflow-hidden font-sans text-white">
-      {/* K7 Dark Obsidian Glassmorphic Frame */}
+      {/* Angel CyberShield Dark Obsidian Glassmorphic Frame */}
       <div
         data-tauri-drag-region
         className="w-full h-full rounded-2xl border border-cyan-400/40 bg-slate-950/90 backdrop-blur-3xl shadow-[0_0_60px_rgba(0,240,255,0.22)] flex flex-col overflow-hidden relative"
       >
-        {/* Custom K7 Titlebar */}
+        {/* Custom CyberShield Titlebar */}
         <div
           data-tauri-drag-region
           className="h-10 px-3.5 bg-slate-900/90 border-b border-cyan-400/30 flex items-center justify-between shrink-0 select-none"
@@ -696,7 +696,7 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
               <Shield size={14} className="text-emerald-400" />
             </div>
             <span className="text-xs font-black tracking-widest text-cyan-200">
-              PROJECT ANGEL V3 • K7 SECURITY & OS DOCTOR SUITE
+              PROJECT ANGEL V3 • CYBERSHIELD SECURITY & OS DOCTOR SUITE
             </span>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-950 border border-cyan-500/40 text-cyan-300">
               AEGIS v3.4.2
@@ -716,7 +716,7 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
           </div>
         </div>
 
-        {/* Top K7 Protection Status Banner */}
+        {/* Top CyberShield Protection Status Banner */}
         <div className="p-3.5 bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border-b border-cyan-400/20 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3.5">
             <div
@@ -810,7 +810,7 @@ export function SecuritySuiteWindow({ initialTab = "antivirus", onClose }: Secur
           </div>
         )}
 
-        {/* 4-Card K7 Navigation Bar */}
+        {/* 4-Card CyberShield Navigation Bar */}
         <div className="px-3 py-2 bg-slate-900/60 border-b border-cyan-400/20 grid grid-cols-4 gap-2 shrink-0">
           {[
             {

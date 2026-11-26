@@ -5,7 +5,6 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   Sliders,
   Brain,
-  Atom,
   Mic,
   Puzzle,
   Database,
@@ -49,7 +48,12 @@ import {
   DownloadCloud,
   UploadCloud,
   Languages,
+  Bell,
+  LifeBuoy,
+  FileText,
 } from "lucide-react";
+import { useUiStrings, UiLanguage } from "../i18n/uiStrings";
+import { speakText } from "../services/voiceEngine";
 import {
   PluginSourceType,
   AngelForgedPlugin,
@@ -97,18 +101,30 @@ interface MenuControlCenterProps {
 function normalizeTab(tab?: string): string {
   if (!tab) return "general";
   const lower = tab.toLowerCase();
+  if (lower === "general") return "general";
+  if (lower === "brain") return "brain";
+  if (lower === "voice" || lower === "avatar" || lower === "avatar_voice") return "avatar_voice";
+  if (lower === "antivirus" || lower === "firewall" || lower === "security" || lower === "doctor" || lower === "cybershield")
+    return "cybershield";
+  if (lower === "plugins" || lower === "skills" || lower === "forge" || lower === "workflows" || lower === "tools")
+    return "tools";
   if (
     lower === "keys" ||
     lower === "apikeys" ||
     lower === "cloud" ||
     lower === "storage" ||
-    lower === "cloud_storage"
+    lower === "cloud_storage" ||
+    lower === "api_keys" ||
+    lower === "learning" ||
+    lower === "memory" ||
+    lower === "bridge" ||
+    lower === "telemetry" ||
+    lower === "settings" ||
+    lower === "support" ||
+    lower === "settings_support"
   )
-    return "api_keys";
-  if (lower === "learning") return "memory";
-  if (lower === "forge") return "skills";
-  if (lower === "antivirus" || lower === "firewall") return "security";
-  return tab;
+    return "settings_support";
+  return "general";
 }
 
 interface SkillItem {
@@ -131,8 +147,73 @@ export function MenuControlCenterWindow({
   onClose,
   onOpenSecurity,
 }: MenuControlCenterProps) {
+  const [ui, uiLang, setUiLang] = useUiStrings();
   const [activeTab, setActiveTab] = useState<string>(() => normalizeTab(initialTab));
+  const [settingsSubTab, setSettingsSubTab] = useState<
+    "windows" | "themes" | "language" | "multicloud" | "memory" | "crossdevice" | "usage" | "support"
+  >(() => {
+    const lower = (initialTab || "").toLowerCase();
+    if (lower === "memory" || lower === "learning") return "memory";
+    if (lower === "bridge") return "crossdevice";
+    if (lower === "telemetry") return "usage";
+    if (lower === "api_keys" || lower === "keys" || lower === "cloud" || lower === "storage" || lower === "cloud_storage")
+      return "multicloud";
+    if (lower === "support") return "support";
+    return "windows";
+  });
   const [statusMessage, setStatusMessage] = useState<string>("");
+
+  // Section 1: Basic Details, Custom Boss Greeting, Smart Reminders & Wellness Break Timer
+  const [generalProfile, setGeneralProfile] = useState<{ displayName: string; greetingTemplate: string }>(() => {
+    try {
+      const raw = localStorage.getItem("angel_general_profile");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return { displayName: "Raja", greetingTemplate: "Welcome Boss" };
+  });
+
+  type ReminderCat = "Meeting" | "Payment / Account Transfer" | "Birthday / Anniversary Wish" | "Daily Note";
+  interface SmartReminderItem {
+    id: string;
+    category: ReminderCat;
+    title: string;
+    when: string;
+    note: string;
+  }
+  const [smartReminders, setSmartReminders] = useState<SmartReminderItem[]>(() => {
+    try {
+      const raw = localStorage.getItem("angel_smart_reminders");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [
+      {
+        id: "rem-1",
+        category: "Meeting",
+        title: "Grace Church Weekly Sync",
+        when: "Today 6:00 PM",
+        note: "Review Sunday service slides & member follow-ups",
+      },
+    ];
+  });
+  const [newRemCat, setNewRemCat] = useState<ReminderCat>("Meeting");
+  const [newRemTitle, setNewRemTitle] = useState("");
+  const [newRemWhen, setNewRemWhen] = useState("");
+  const [newRemNote, setNewRemNote] = useState("");
+
+  const [breakIntervalMins, setBreakIntervalMins] = useState<string>(() => {
+    return localStorage.getItem("angel_wellness_break_mins") || "45";
+  });
+
+  // Section 2: Smart Auto-Routing Toggle
+  const [smartAutoRouting, setSmartAutoRouting] = useState<boolean>(() => {
+    return localStorage.getItem("angel_smart_auto_routing") !== "false";
+  });
+
+  // Section 6: UI Theme Style & Project Analysis Report
+  const [uiThemeStyle, setUiThemeStyle] = useState<"acrylic" | "dark_glass">(() => {
+    return (localStorage.getItem("angel_ui_theme_style") as "acrylic" | "dark_glass") || "acrylic";
+  });
+  const [showProjectReport, setShowProjectReport] = useState(false);
 
   useEffect(() => {
     if (initialTab) {
@@ -211,13 +292,7 @@ export function MenuControlCenterWindow({
   const [coreTheme, setCoreTheme] = useState<string>(() => {
     return localStorage.getItem("angel_3d_core_theme") || "quantum_gyro";
   });
-  const [cursorCompanion, setCursorCompanion] = useState<boolean>(() => {
-    return localStorage.getItem("angel_cursor_companion_enabled") === "true";
-  });
-  const [desktopCompanion, setDesktopCompanion] = useState<boolean>(() => {
-    const val = localStorage.getItem("angel_desktop_companion_enabled");
-    return val === null ? true : val === "true";
-  });
+  const [cursorCompanion] = useState<boolean>(false);
   const [gitBackupStatus, setGitBackupStatus] = useState<{
     branch: string;
     remote_url: string;
@@ -237,10 +312,10 @@ export function MenuControlCenterWindow({
   };
 
   useEffect(() => {
-    if (activeTab === "api_keys") {
+    if (activeTab === "settings_support" || activeTab === "api_keys") {
       refreshGitBackupStatus();
     }
-  }, [activeTab]);
+  }, [activeTab, settingsSubTab]);
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
     const val = localStorage.getItem("angel_earth_opacity");
     return val ? parseFloat(val) : 0.5;
@@ -278,26 +353,6 @@ export function MenuControlCenterWindow({
     );
     emit("core-theme-changed", { theme }).catch(() => {});
     showToast(`3D Core Theme changed: ${theme.replace('_', ' ').toUpperCase()}`);
-  };
-
-  const handleToggleCursorCompanion = (enable: boolean) => {
-    setCursorCompanion(enable);
-    localStorage.setItem("angel_cursor_companion_enabled", enable.toString());
-    window.dispatchEvent(
-      new CustomEvent("angel-cursor-companion-toggle", {
-        detail: { enabled: enable },
-      })
-    );
-    emit("cursor-companion-toggle", { enabled: enable }).catch(() => {});
-    invoke("toggle_cursor_orb", { enabled: enable }).catch(() => {});
-    showToast(enable ? "Floating Cursor Companion Orb Activated" : "Cursor Companion Orb Deactivated");
-  };
-
-  const handleToggleDesktopCompanion = (enable: boolean) => {
-    setDesktopCompanion(enable);
-    localStorage.setItem("angel_desktop_companion_enabled", enable.toString());
-    invoke("set_companion_visible", { visible: enable }).catch(() => {});
-    showToast(enable ? "Desktop 3D Companion Activated" : "Desktop 3D Companion Hidden");
   };
 
   const handleToggleAutoStart = async (enable: boolean) => {
@@ -699,7 +754,7 @@ export function MenuControlCenterWindow({
   };
 
   useEffect(() => {
-    if (activeTab === "voice") {
+    if (activeTab === "avatar_voice" || activeTab === "voice") {
       refreshMicrophones();
     }
   }, [activeTab]);
@@ -1387,20 +1442,14 @@ export function MenuControlCenterWindow({
     }
   };
 
-  // 12 Sidebar Navigation Items
+  // Clean 6-Section Menu Architecture
   const navItems = [
-    { id: "general", label: "General", icon: Sliders, group: "Core" },
-    { id: "brain", label: "AI Brain", icon: Brain, group: "Core" },
-    { id: "api_keys", label: "Cloud & Storage", icon: Cloud, group: "Core" },
-    { id: "voice", label: "AI Voice", icon: Mic, group: "Interaction" },
-    { id: "plugins", label: "Add New Plugin", icon: Puzzle, group: "Extensibility" },
-    { id: "memory", label: "AI Learning", icon: Database, group: "Intelligence" },
-    { id: "skills", label: "Skill Forge", icon: Wrench, group: "Execution" },
-    { id: "workflows", label: "Automation Workflows", icon: GitMerge, group: "Execution" },
-    { id: "bridge", label: "Cross-Device Bridge", icon: Smartphone, group: "Ecosystem" },
-    { id: "security", label: "AI Antivirus & Firewall", icon: ShieldCheck, group: "Protection" },
-    { id: "doctor", label: "OS Doctor", icon: Stethoscope, group: "Diagnostics" },
-    { id: "telemetry", label: "AI Usage & Telemetry", icon: BarChart3, group: "Analytics" },
+    { id: "general", label: ui.sections.general, icon: Sliders, group: "1. Workspace" },
+    { id: "brain", label: ui.sections.brain, icon: Brain, group: "2. Intelligence" },
+    { id: "avatar_voice", label: ui.sections.avatar_voice, icon: Mic, group: "3. Companion" },
+    { id: "cybershield", label: ui.sections.cybershield, icon: ShieldCheck, group: "4. Security" },
+    { id: "tools", label: ui.sections.tools, icon: Wrench, group: "5. Extensibility" },
+    { id: "settings_support", label: ui.sections.settings_support, icon: Cloud, group: "6. System" },
   ];
 
   return (
@@ -1506,155 +1555,235 @@ export function MenuControlCenterWindow({
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
                     <Sliders size={18} className="text-cyan-400" />
-                    <span>General System Settings</span>
+                    <span>{ui.sections.general}</span>
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">
-                    Manage Windows startup persistence, global hotkeys, 3D ambient Earth, and window close actions.
+                    {ui.labels.basicDetails}, {ui.labels.smartReminders}, &amp; {ui.labels.breakTimer}.
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {/* Windows Startup */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
-                    <div className="text-xs font-bold text-white flex items-center justify-between">
-                      <span>Windows Auto-Start</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${autoStart ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
-                        {autoStart ? "ACTIVE" : "OFF"}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Launch Angel AI companion silently on Windows 11 boot via HKCU registry.
-                    </p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        onClick={() => handleToggleAutoStart(true)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-                          autoStart
-                            ? "bg-cyan-500 text-slate-950 shadow-sm"
-                            : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        Enabled
-                      </button>
-                      <button
-                        onClick={() => handleToggleAutoStart(false)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-                          !autoStart
-                            ? "bg-rose-600 text-white shadow-sm"
-                            : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        Disabled
-                      </button>
-                    </div>
+                {/* BASIC DETAILS & CUSTOM BOSS GREETING */}
+                <div className="p-5 rounded-2xl bg-white/5 border border-cyan-400/30 space-y-3">
+                  <div className="text-sm font-bold text-white flex items-center gap-2">
+                    <Sparkles size={15} className="text-cyan-400" />
+                    <span>{ui.labels.basicDetails}</span>
                   </div>
-
-                  {/* Global Hotkey */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
-                    <div className="text-xs font-bold text-white flex items-center justify-between">
-                      <span>Global Summon Hotkey</span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300">
-                        ALWAYS READY
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Instantly summon HUD or Active Co-Pilot from MS Word, Photoshop, VS Code.
-                    </p>
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/40 border border-cyan-400/40 font-mono text-xs text-cyan-300 font-bold">
-                      <Zap size={14} className="text-cyan-400" />
-                      <span>Alt + Space</span>
-                    </div>
-                  </div>
-
-                  {/* Floating Cursor Companion Orb */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
-                    <div className="text-xs font-bold text-white flex items-center justify-between">
-                      <span>Cursor Companion Orb</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${cursorCompanion ? "bg-cyan-500/20 text-cyan-300" : "bg-slate-800 text-slate-400"}`}>
-                        {cursorCompanion ? "ACTIVE" : "OFF"}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Mini 3D orb follows mouse with active app badge & cursor paste tool.
-                    </p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        onClick={() => handleToggleCursorCompanion(true)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-                          cursorCompanion
-                            ? "bg-cyan-500 text-slate-950 shadow-sm"
-                            : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        Enabled
-                      </button>
-                      <button
-                        onClick={() => handleToggleCursorCompanion(false)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-                          !cursorCompanion
-                            ? "bg-slate-700 text-slate-300"
-                            : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        Disabled
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Desktop 3D Companion (3D Walking Avatar) */}
-                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
-                    <div className="text-xs font-bold text-white flex items-center justify-between">
-                      <span>Desktop 3D Companion (3D Walking Avatar)</span>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${desktopCompanion ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
-                        {desktopCompanion ? "ACTIVE" : "OFF"}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-snug">
-                      Autonomous 3D Angel Female Companion with roaming, cursor IK tracking, lip-sync, and holographic speech bubble.
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <button
-                        onClick={() => handleToggleDesktopCompanion(true)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-                          desktopCompanion
-                            ? "bg-emerald-500 text-slate-950 shadow-sm"
-                            : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        Enabled
-                      </button>
-                      <button
-                        onClick={() => handleToggleDesktopCompanion(false)}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
-                          !desktopCompanion
-                            ? "bg-slate-700 text-slate-300"
-                            : "bg-white/5 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        Disabled
-                      </button>
-                      <label className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-bold cursor-pointer transition">
-                        <span>Upload Custom .glb</span>
-                        <input
-                          type="file"
-                          accept=".glb,.gltf,.vrm"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            const reader = new FileReader();
-                            reader.onload = () => {
-                              if (typeof reader.result === "string") {
-                                localStorage.setItem("angel_custom_avatar_glb", reader.result);
-                                emit("angel-custom-avatar-changed", {}).catch(() => {});
-                                showToast(`Custom 3D Avatar "${file.name}" loaded!`);
-                              }
-                            };
-                            reader.readAsDataURL(file);
-                          }}
-                        />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        {ui.labels.displayName}
                       </label>
+                      <input
+                        type="text"
+                        value={generalProfile.displayName}
+                        onChange={(e) =>
+                          setGeneralProfile((p) => ({ ...p, displayName: e.target.value }))
+                        }
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-400"
+                      />
                     </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                        {ui.labels.greetingTemplate}
+                      </label>
+                      <input
+                        type="text"
+                        value={generalProfile.greetingTemplate}
+                        onChange={(e) =>
+                          setGeneralProfile((p) => ({ ...p, greetingTemplate: e.target.value }))
+                        }
+                        placeholder="Welcome Boss / Welcome Raja"
+                        className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-white focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    {["Welcome Boss", "Welcome Raja", "வணக்கம் ராஜா"].map((preset) => (
+                      <button
+                        key={preset}
+                        onClick={() => setGeneralProfile((p) => ({ ...p, greetingTemplate: preset }))}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-slate-300"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => {
+                        localStorage.setItem("angel_general_profile", JSON.stringify(generalProfile));
+                        window.dispatchEvent(new Event("angel-general-profile-changed"));
+                        speakText(`${generalProfile.greetingTemplate}, ${generalProfile.displayName}!`);
+                        showToast("Boss Greeting saved & tested!");
+                      }}
+                      className="ml-auto px-3.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs"
+                    >
+                      Save &amp; Speak Greeting
+                    </button>
+                  </div>
+                </div>
+
+                {/* DAILY BRIEFING & PERSONAL SMART REMINDERS */}
+                <div className="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm font-bold text-white flex items-center gap-2">
+                      <Bell size={15} className="text-amber-400" />
+                      <span>{ui.labels.smartReminders}</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (smartReminders.length === 0) {
+                          speakText(`வணக்கம் ${generalProfile.displayName}, இன்று புதிய நினைவூட்டல்கள் எதுவும் இல்லை.`);
+                          return;
+                        }
+                        const summary = smartReminders
+                          .map((r, i) => `${i + 1}. ${r.category}: ${r.title} (${r.when})`)
+                          .join(". ");
+                        speakText(`Good day ${generalProfile.displayName}. Today's briefing: ${summary}`);
+                        showToast("Reading Today's Briefing...");
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-xs font-bold flex items-center gap-1.5"
+                    >
+                      <Volume2 size={13} />
+                      <span>{ui.labels.readBriefing}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                    <select
+                      value={newRemCat}
+                      onChange={(e) => setNewRemCat(e.target.value as any)}
+                      className="px-2.5 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200"
+                    >
+                      <option value="Meeting">Meeting</option>
+                      <option value="Payment / Account Transfer">Payment / Account Transfer</option>
+                      <option value="Birthday / Anniversary Wish">Birthday / Anniversary Wish</option>
+                      <option value="Daily Note">Daily Note</option>
+                    </select>
+                    <input
+                      value={newRemTitle}
+                      onChange={(e) => setNewRemTitle(e.target.value)}
+                      placeholder="Title..."
+                      className="px-2.5 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-white"
+                    />
+                    <input
+                      value={newRemWhen}
+                      onChange={(e) => setNewRemWhen(e.target.value)}
+                      placeholder="Time / Date..."
+                      className="px-2.5 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-white"
+                    />
+                    <div className="flex gap-1.5">
+                      <input
+                        value={newRemNote}
+                        onChange={(e) => setNewRemNote(e.target.value)}
+                        placeholder="Recipient / Note..."
+                        className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-white"
+                      />
+                      <button
+                        onClick={() => {
+                          if (!newRemTitle.trim()) return;
+                          const next = [
+                            {
+                              id: `rem-${Date.now()}`,
+                              category: newRemCat,
+                              title: newRemTitle.trim(),
+                              when: newRemWhen.trim() || "Today",
+                              note: newRemNote.trim(),
+                            },
+                            ...smartReminders,
+                          ];
+                          setSmartReminders(next);
+                          localStorage.setItem("angel_smart_reminders", JSON.stringify(next));
+                          setNewRemTitle("");
+                          setNewRemWhen("");
+                          setNewRemNote("");
+                          showToast("Smart Reminder added!");
+                        }}
+                        className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs shrink-0"
+                      >
+                        <Plus size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                    {smartReminders.map((r) => (
+                      <div
+                        key={r.id}
+                        className="px-3 py-2 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0">
+                          <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold mr-2">
+                            {r.category}
+                          </span>
+                          <span className="font-semibold text-white">{r.title}</span>
+                          <span className="text-slate-400 text-[11px] ml-2">• {r.when}</span>
+                          {r.note && <div className="text-[10.5px] text-slate-400 truncate mt-0.5">{r.note}</div>}
+                        </div>
+                        <button
+                          onClick={() => {
+                            const next = smartReminders.filter((item) => item.id !== r.id);
+                            setSmartReminders(next);
+                            localStorage.setItem("angel_smart_reminders", JSON.stringify(next));
+                          }}
+                          className="p-1 rounded-lg hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 shrink-0"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* WELLNESS BREAK TIMER */}
+                <div className="p-4 rounded-xl bg-white/5 border border-white/10 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold text-white flex items-center gap-2">
+                      <Clock size={14} className="text-emerald-400" />
+                      <span>{ui.labels.breakTimer}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Gentle hydration &amp; eye-rest voice alerts during uninterrupted work.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { id: "30", label: "30 mins" },
+                      { id: "45", label: "45 mins" },
+                      { id: "60", label: "60 mins" },
+                      { id: "off", label: "Off" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.id}
+                        onClick={() => {
+                          setBreakIntervalMins(opt.id);
+                          localStorage.setItem("angel_wellness_break_mins", opt.id);
+                          showToast(`Wellness Break Timer set to ${opt.label}`);
+                        }}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold border transition ${
+                          breakIntervalMins === opt.id
+                            ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
+                            : "bg-black/40 border-white/10 text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* LOGS SUBSECTION */}
+                <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-extrabold uppercase tracking-wider text-cyan-300 flex items-center gap-2">
+                      <Terminal size={13} />
+                      <span>Logs</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-emerald-300">Zero Terminal Flash • Live</span>
+                  </div>
+                  <div className="max-h-28 overflow-y-auto rounded-xl bg-black/50 border border-white/10 p-2.5 font-mono text-[11px] text-slate-300 space-y-1">
+                    <div>[OK] Rust Core Online (CREATE_NO_WINDOW = 0x08000000)</div>
+                    <div>[OK] Global Alt+Space Co-Pilot Hook Registered</div>
+                    <div>[OK] 2D &amp; 3D Companion Engines Ready (No stray overlays)</div>
+                    <div>[OK] OmniRoute Smart Auto-Router &amp; Live Model Sync Active</div>
                   </div>
                 </div>
 
@@ -1752,248 +1881,18 @@ export function MenuControlCenterWindow({
                     >
                       Auto Live
                     </button>
-                  </div>
-                </div>
-
-                {/* 3D CORE THEME SWITCHER (4 SCI-FI CORES) */}
-                <div className="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-bold text-white flex items-center gap-2">
-                        <Sparkles size={16} className="text-cyan-400" />
-                        <span>3D Core Theme Switcher (4 Interactive Three.js Cores)</span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        Seamlessly morph between 4 real-time sci-fi cores with zero page reload.
-                      </p>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-cyan-950/80 border border-cyan-400/40 text-cyan-300">
-                      ACTIVE: {coreTheme.replace('_', ' ').toUpperCase()}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    {/* Core 1: Quantum Gyroscope */}
-                    <div
-                      onClick={() => handleSelectCoreTheme("quantum_gyro")}
-                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        coreTheme === "quantum_gyro"
-                          ? "bg-cyan-950/40 border-cyan-400 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]"
-                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
-                      }`}
+                    <button
+                      onClick={() => {
+                        const cur = localStorage.getItem("angel_2d_cursor_tracking") !== "false";
+                        const next = !cur;
+                        localStorage.setItem("angel_2d_cursor_tracking", next.toString());
+                        emit("angel-2d-cursor-toggle", { enabled: next }).catch(() => {});
+                        showToast(next ? "2D Cursor Tracking Enabled" : "2D Cursor Tracking Paused");
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/40 text-[11px] text-cyan-200 font-bold"
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-lg bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center">
-                            <Atom size={18} className="text-cyan-400" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-white">Quantum Gyroscope Core</div>
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-cyan-500/30 text-cyan-300 font-mono">
-                              JARVIS Style
-                            </span>
-                          </div>
-                        </div>
-                        {coreTheme === "quantum_gyro" && <Check size={16} className="text-cyan-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-400 leading-relaxed">
-                        Concentric counter-rotating holographic rings with inner pulsating cyan energy core and orbital particles.
-                      </p>
-                    </div>
-
-                    {/* Core 2: Living Neural Synapse */}
-                    <div
-                      onClick={() => handleSelectCoreTheme("neural_synapse")}
-                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        coreTheme === "neural_synapse"
-                          ? "bg-purple-950/40 border-purple-400 text-purple-100 shadow-[0_0_15px_rgba(168,85,247,0.25)]"
-                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-lg bg-purple-500/20 border border-purple-400/40 flex items-center justify-center">
-                            <Brain size={18} className="text-purple-400" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-white">Living Neural Synapse</div>
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-purple-500/30 text-purple-300 font-mono">
-                              Cognitive Web
-                            </span>
-                          </div>
-                        </div>
-                        {coreTheme === "neural_synapse" && <Check size={16} className="text-purple-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-400 leading-relaxed">
-                        110 interconnected synaptic nodes with dynamic lightning filaments that pulse faster during AI thinking and speech.
-                      </p>
-                    </div>
-
-                    {/* Core 3: Satellite Orbital Earth */}
-                    <div
-                      onClick={() => handleSelectCoreTheme("orbital_earth")}
-                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        coreTheme === "orbital_earth"
-                          ? "bg-emerald-950/40 border-emerald-400 text-emerald-100 shadow-[0_0_15px_rgba(16,185,129,0.25)]"
-                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center">
-                            <Globe size={18} className="text-emerald-400" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-white">Satellite Orbital Earth</div>
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-500/30 text-emerald-300 font-mono">
-                              Day/Night Orbit
-                            </span>
-                          </div>
-                        </div>
-                        {coreTheme === "orbital_earth" && <Check size={16} className="text-emerald-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-400 leading-relaxed">
-                        Orbital Earth with day/night solar lighting, specular ocean reflection, moving clouds, Moon, and ISS station.
-                      </p>
-                    </div>
-
-                    {/* Core 4: Volumetric Hologram */}
-                    <div
-                      onClick={() => handleSelectCoreTheme("volumetric_hologram")}
-                      className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
-                        coreTheme === "volumetric_hologram"
-                          ? "bg-teal-950/40 border-teal-400 text-teal-100 shadow-[0_0_15px_rgba(20,184,166,0.25)]"
-                          : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-lg bg-teal-500/20 border border-teal-400/40 flex items-center justify-center">
-                            <Sparkles size={18} className="text-teal-400" />
-                          </div>
-                          <div>
-                            <div className="text-xs font-bold text-white">Volumetric Hologram</div>
-                            <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-teal-500/30 text-teal-300 font-mono">
-                              Particle Lattice
-                            </span>
-                          </div>
-                        </div>
-                        {coreTheme === "volumetric_hologram" && <Check size={16} className="text-teal-400 shrink-0" />}
-                      </div>
-                      <p className="text-[11px] text-slate-400 leading-relaxed">
-                        1,800 undulating waveform particles in a futuristic holographic silhouette with traversing laser scan plane.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Ambient 3D Stage Tuning & Visual FX */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-4">
-                  <div className="text-sm font-semibold text-white flex items-center justify-between">
-                    <span>Ambient 3D Stage HUD Tuning</span>
-                    <span className="text-xs font-mono text-cyan-400">HoloEarthStage</span>
-                  </div>
-
-                  <div className="space-y-3">
-                    {/* Background Opacity (50% default) */}
-                    <div>
-                      <div className="flex justify-between text-xs text-slate-300 mb-1">
-                        <span>Background Opacity: {Math.round(earthOpacity * 100)}%</span>
-                        <span className="text-[11px] text-slate-400 font-mono">Default: 50%</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.1"
-                        max="1.0"
-                        step="0.05"
-                        value={earthOpacity}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setEarthOpacity(val);
-                          localStorage.setItem("angel_earth_opacity", val.toString());
-                          dispatchEarthConfig(earthScale, weatherFx, val);
-                        }}
-                        className="w-full accent-cyan-400 bg-slate-800"
-                      />
-                    </div>
-
-                    {/* Earth Size / Scale Slider (0.6x to 1.5x, default 1.0x) */}
-                    <div>
-                      <div className="flex justify-between text-xs text-slate-300 mb-1">
-                        <span>Earth Size / Scale: {earthScale.toFixed(2)}x</span>
-                        <span className="text-[11px] text-slate-400 font-mono">Range: 0.6x – 1.5x</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.6"
-                        max="1.5"
-                        step="0.05"
-                        value={earthScale}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          setEarthScale(val);
-                          localStorage.setItem("angel_earth_scale", val.toString());
-                          dispatchEarthConfig(val, weatherFx, earthOpacity);
-                        }}
-                        className="w-full accent-cyan-400 bg-slate-800"
-                      />
-                    </div>
-
-                    {/* Real-Time Global Weather FX Toggle */}
-                    <div className="flex items-center gap-3 pt-1">
-                      <input
-                        type="checkbox"
-                        id="weatherFx"
-                        checked={weatherFx}
-                        onChange={(e) => {
-                          const val = e.target.checked;
-                          setWeatherFx(val);
-                          localStorage.setItem("angel_earth_weather_fx", val.toString());
-                          dispatchEarthConfig(earthScale, val, earthOpacity);
-                        }}
-                        className="rounded accent-cyan-400"
-                      />
-                      <label htmlFor="weatherFx" className="text-xs text-slate-300 cursor-pointer">
-                        Real-Time Global Weather FX (Day/Night Solar Angle, Distant Storm Lightning & Polar Aurora Shimmer)
-                      </label>
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-xs text-slate-300 mb-1">
-                        <span>Rotation Velocity: {(earthSpeed * 1000).toFixed(1)}x rad/frame</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.0002"
-                        max="0.003"
-                        step="0.0002"
-                        value={earthSpeed}
-                        onChange={(e) => setEarthSpeed(parseFloat(e.target.value))}
-                        className="w-full accent-cyan-400 bg-slate-800"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-3 pt-1">
-                      <input
-                        type="checkbox"
-                        id="showCelestial"
-                        checked={showCelestial}
-                        onChange={(e) => setShowCelestial(e.target.checked)}
-                        className="rounded accent-cyan-400"
-                      />
-                      <label htmlFor="showCelestial" className="text-xs text-slate-300 cursor-pointer">
-                        Render Orbiting Moon & ISS Space Station
-                      </label>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Window Controls Behavior */}
-                <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
-                  <div className="text-sm font-semibold text-white">Window Controls Behavior</div>
-                  <div className="text-xs text-slate-400 space-y-1">
-                    <div>• <strong className="text-slate-200">- (Minimize):</strong> Hides Angel AI to the Windows System Tray, keeping background security sentries and the global <code className="text-cyan-400">Alt + Space</code> hotkey active.</div>
-                    <div>• <strong className="text-slate-200">X (Close):</strong> Cleanly terminates and exits the entire Angel AI application process.</div>
+                      Toggle Cursor Tracking
+                    </button>
                   </div>
                 </div>
 
@@ -2023,6 +1922,10 @@ export function MenuControlCenterWindow({
                 if (p.id === "ollama" || p.id === "local_lmstudio") {
                   return Boolean(p.endpoint && p.endpoint.trim().length > 0);
                 }
+                if (p.id === "antigravity" || p.id === "gemini") {
+                  const gemKey = providers.find((x) => x.id === "gemini")?.apiKey || localStorage.getItem("angel_gemini_key") || "";
+                  return extractKeysList(p.apiKey).length > 0 || extractKeysList(gemKey).length > 0;
+                }
                 return extractKeysList(p.apiKey).length > 0;
               };
 
@@ -2036,18 +1939,253 @@ export function MenuControlCenterWindow({
               return (
                 <div className="space-y-6 max-w-4xl">
                   {/* AI PROVIDER Header */}
-                  <div>
-                    <h2 className="text-lg font-black tracking-wide text-white flex items-center gap-2">
-                      <Brain size={18} className="text-cyan-400" />
-                      <span>AI PROVIDER</span>
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Choose the brain that powers Angel AI. Switch between ultra-fast cloud models or offline local LLMs at any time.
-                    </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h2 className="text-lg font-black tracking-wide text-white flex items-center gap-2">
+                        <Brain size={18} className="text-cyan-400" />
+                        <span>AI PROVIDER</span>
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Choose the brain that powers Angel AI. Switch between ultra-fast cloud models or offline local LLMs at any time.
+                      </p>
+                    </div>
+                    <span
+                      className={`px-3 py-1 rounded-full text-[11px] font-mono font-bold border ${
+                        activeProvider.category === "local"
+                          ? "bg-emerald-950/70 border-emerald-400/50 text-emerald-300"
+                          : activeProvider.category === "cloud"
+                          ? "bg-cyan-950/70 border-cyan-400/50 text-cyan-300"
+                          : "bg-amber-950/70 border-amber-400/50 text-amber-300"
+                      }`}
+                    >
+                      {activeProvider.category === "local"
+                        ? `OFFLINE ENGINE • ${activeProvider.name.toUpperCase()}`
+                        : activeProvider.category === "cloud"
+                        ? `ONLINE BRAIN • ${activeProvider.name.toUpperCase()}`
+                        : "AUTO SMART ROUTER"}
+                    </span>
                   </div>
 
-                  {/* 1. 2-COLUMN SELECTOR GRID */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* TWO-COLUMN ONLINE BRAIN VS OFFLINE/LOCAL ENGINE + SMART AUTO-ROUTING */}
+                  <div className="p-4 rounded-2xl bg-white/5 border border-cyan-400/30 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-bold text-white flex items-center gap-2">
+                          <Zap size={14} className="text-amber-400" />
+                          <span>{ui.labels.smartAutoRouting}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          Routes heavy coding/vision/3D tasks to Online Brain and cascades seamlessly to Offline Engine when offline.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          const next = !smartAutoRouting;
+                          setSmartAutoRouting(next);
+                          localStorage.setItem("angel_smart_auto_routing", next.toString());
+                          window.dispatchEvent(new Event("angel-models-updated"));
+                          showToast(next ? "Smart Auto-Routing Enabled" : "Manual Provider Mode");
+                        }}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold border transition ${
+                          smartAutoRouting
+                            ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
+                            : "bg-black/40 border-white/10 text-slate-400"
+                        }`}
+                      >
+                        {smartAutoRouting ? "Smart Auto: ON" : "Manual"}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px]">
+                      <div className="p-2.5 rounded-xl bg-cyan-950/30 border border-cyan-400/20">
+                        <div className="font-bold text-cyan-300 mb-1">{ui.labels.onlineBrain}</div>
+                        <div className="text-slate-300">Gemini • DeepSeek • Groq • Claude • OpenRouter • GitHub Copilot</div>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-400/20">
+                        <div className="font-bold text-emerald-300 mb-1">{ui.labels.offlineEngine}</div>
+                        <div className="text-slate-300">Ollama (qwen3.5:4b, think:false) • Local Llama • FreeLLMAPI (31415) • n8n/MCP</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AUTO SMART ROUTER BANNER */}
+                  {(() => {
+                    const autoProvider = providers.find((p) => p.id === "auto");
+                    if (!autoProvider) return null;
+                    const isAutoSelected = activeProviderId === "auto";
+                    return (
+                      <div
+                        onClick={() => handleSelectProvider("auto")}
+                        className={`p-3.5 rounded-2xl border cursor-pointer transition flex items-center justify-between gap-3 ${
+                          isAutoSelected
+                            ? "bg-cyan-950/35 border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.2)]"
+                            : "bg-slate-900/50 border-white/10 hover:border-white/20"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-400/40 flex items-center justify-center shrink-0">
+                            <Zap size={16} className="text-amber-400" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-white flex items-center gap-2">
+                              <span>{autoProvider.name}</span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-400/40">
+                                Active Router
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400">{autoProvider.description}</div>
+                          </div>
+                        </div>
+                        {isAutoSelected ? (
+                          <div className="w-5 h-5 rounded-full bg-cyan-400 text-slate-950 flex items-center justify-center font-bold shrink-0">
+                            <Check size={12} strokeWidth={3} />
+                          </div>
+                        ) : (
+                          <div className="w-5 h-5 rounded-full border border-white/20 shrink-0" />
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* TABLE 1: ONLINE BRAIN (CLOUD HEAVY ENGINE) */}
+                  <div className="rounded-2xl border border-cyan-400/25 bg-slate-900/50 overflow-hidden">
+                    <div className="px-4 py-2.5 bg-cyan-950/40 border-b border-cyan-400/20 flex items-center justify-between">
+                      <div className="text-xs font-extrabold uppercase tracking-wider text-cyan-300 flex items-center gap-2">
+                        <Globe size={14} />
+                        <span>Table 1 • {ui.labels.onlineBrain}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-cyan-200/80">
+                        Antigravity • Gemini • DeepSeek • Groq • Claude • GitHub Copilot • OpenRouter • OpenAI
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-slate-300">
+                        <thead className="bg-black/30 text-[10px] uppercase tracking-wider text-slate-400 border-b border-white/10">
+                          <tr>
+                            <th className="px-3.5 py-2">Provider</th>
+                            <th className="px-3.5 py-2">Default Model</th>
+                            <th className="px-3.5 py-2">Status</th>
+                            <th className="px-3.5 py-2 text-right">Select</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {providers
+                            .filter((p) => p.category === "cloud")
+                            .map((p) => {
+                              const isSelected = activeProviderId === p.id;
+                              const configured = isProviderConfigured(p);
+                              return (
+                                <tr
+                                  key={p.id}
+                                  onClick={() => handleSelectProvider(p.id)}
+                                  className={`cursor-pointer transition ${
+                                    isSelected ? "bg-cyan-500/15 text-white" : "hover:bg-white/[0.04]"
+                                  }`}
+                                >
+                                  <td className="px-3.5 py-2.5 font-bold flex items-center gap-2">
+                                    <span>{p.name}</span>
+                                  </td>
+                                  <td className="px-3.5 py-2.5 font-mono text-[11px] text-cyan-200">{p.defaultModel}</td>
+                                  <td className="px-3.5 py-2.5">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                                        configured
+                                          ? "bg-emerald-500/20 text-emerald-300 border-emerald-400/40"
+                                          : "bg-slate-800/80 text-slate-400 border-white/10"
+                                      }`}
+                                    >
+                                      {configured ? "Configured" : "Needs Key"}
+                                    </span>
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right">
+                                    {isSelected ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-cyan-400 text-slate-950 font-bold text-[10px]">
+                                        <Check size={10} strokeWidth={3} /> Active
+                                      </span>
+                                    ) : (
+                                      <span className="px-2.5 py-0.5 rounded-full border border-white/15 text-[10px] text-slate-400">
+                                        Use
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* TABLE 2: OFFLINE & LOCAL ENGINE */}
+                  <div className="rounded-2xl border border-emerald-400/25 bg-slate-900/50 overflow-hidden">
+                    <div className="px-4 py-2.5 bg-emerald-950/35 border-b border-emerald-400/20 flex items-center justify-between">
+                      <div className="text-xs font-extrabold uppercase tracking-wider text-emerald-300 flex items-center gap-2">
+                        <HardDrive size={14} />
+                        <span>Table 2 • {ui.labels.offlineEngine}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-emerald-200/80">
+                        Ollama (qwen3.5:4b) • FreeLLMAPI (31415) • Local LM Studio
+                      </span>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs text-slate-300">
+                        <thead className="bg-black/30 text-[10px] uppercase tracking-wider text-slate-400 border-b border-white/10">
+                          <tr>
+                            <th className="px-3.5 py-2">Local Engine</th>
+                            <th className="px-3.5 py-2">Endpoint / Model</th>
+                            <th className="px-3.5 py-2">Status</th>
+                            <th className="px-3.5 py-2 text-right">Select</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {providers
+                            .filter((p) => p.category === "local")
+                            .map((p) => {
+                              const isSelected = activeProviderId === p.id;
+                              const configured = isProviderConfigured(p);
+                              return (
+                                <tr
+                                  key={p.id}
+                                  onClick={() => handleSelectProvider(p.id)}
+                                  className={`cursor-pointer transition ${
+                                    isSelected ? "bg-emerald-500/15 text-white" : "hover:bg-white/[0.04]"
+                                  }`}
+                                >
+                                  <td className="px-3.5 py-2.5 font-bold">{p.name}</td>
+                                  <td className="px-3.5 py-2.5 font-mono text-[11px] text-emerald-200">
+                                    {p.defaultModel} • {p.endpoint}
+                                  </td>
+                                  <td className="px-3.5 py-2.5">
+                                    <span
+                                      className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                                        configured
+                                          ? "bg-emerald-500/20 text-emerald-300 border-emerald-400/40"
+                                          : "bg-slate-800/80 text-slate-400 border-white/10"
+                                      }`}
+                                    >
+                                      {configured ? "Local Ready" : "Standby"}
+                                    </span>
+                                  </td>
+                                  <td className="px-3.5 py-2.5 text-right">
+                                    {isSelected ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-bold text-[10px]">
+                                        <Check size={10} strokeWidth={3} /> Active
+                                      </span>
+                                    ) : (
+                                      <span className="px-2.5 py-0.5 rounded-full border border-white/15 text-[10px] text-slate-400">
+                                        Use
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* SELECTED PROVIDER CONFIG PANE */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 hidden">
                     {providers.map((p) => {
                       const isSelected = activeProviderId === p.id;
                       return (
@@ -2557,9 +2695,385 @@ export function MenuControlCenterWindow({
               );
             })()}
 
-            {/* 3. MULTI-CLOUD STORAGE & REMOTE CONTROL HUB TAB */}
-            {activeTab === "api_keys" && (
-              <div className="space-y-6 max-w-3xl">
+            {/* 3. SETTINGS & SUPPORT — STRUCTURED 8 SUB-TABS */}
+            {(activeTab === "settings_support" || activeTab === "api_keys") && (
+              <div className="space-y-5 max-w-3xl">
+                {/* 8-TAB SUB-NAVIGATION BAR */}
+                <div className="p-2 rounded-2xl bg-slate-900/70 border border-white/10 flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: "windows", label: "Windows Options" },
+                      { id: "themes", label: "Themes" },
+                      { id: "language", label: "Language" },
+                      { id: "multicloud", label: "Multi-Cloud" },
+                      { id: "memory", label: "AI Memory" },
+                      { id: "crossdevice", label: "Cross-Device" },
+                      { id: "usage", label: "AI Usage & Cost" },
+                      { id: "support", label: "Support & Diagnostics" },
+                    ] as const
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setSettingsSubTab(st.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        settingsSubTab === st.id
+                          ? "bg-cyan-500/20 border border-cyan-400 text-cyan-200 shadow-sm"
+                          : "bg-black/30 border border-white/5 text-slate-400 hover:text-white hover:bg-white/5"
+                      }`}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* SUB-TAB 1: WINDOWS OPTIONS */}
+                {activeTab === "settings_support" && settingsSubTab === "windows" && (
+                  <div className="space-y-4">
+                    <div className="text-sm font-bold text-white flex items-center gap-2">
+                      <Sliders size={16} className="text-cyan-400" />
+                      <span>Windows Options</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                        <div className="text-xs font-bold text-white flex items-center justify-between">
+                          <span>Windows Auto-Start</span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${autoStart ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
+                            {autoStart ? "ACTIVE" : "OFF"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-snug">
+                          Launch Angel AI companion silently on Windows 11 boot via HKCU registry.
+                        </p>
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            onClick={() => handleToggleAutoStart(true)}
+                            className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                              autoStart ? "bg-cyan-500 text-slate-950 shadow-sm" : "bg-white/5 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            Enabled
+                          </button>
+                          <button
+                            onClick={() => handleToggleAutoStart(false)}
+                            className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                              !autoStart ? "bg-rose-600 text-white shadow-sm" : "bg-white/5 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            Disabled
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                        <div className="text-xs font-bold text-white flex items-center justify-between">
+                          <span>Global Summon Hotkey</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300">
+                            ALWAYS READY
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-snug">
+                          Instantly summon HUD or Active Co-Pilot from MS Word, Photoshop, VS Code.
+                        </p>
+                        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/40 border border-cyan-400/40 font-mono text-xs text-cyan-300 font-bold">
+                          <Zap size={14} className="text-cyan-400" />
+                          <span>Alt + Space</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2">
+                      <div className="text-sm font-semibold text-white">Window Controls Behavior</div>
+                      <div className="text-xs text-slate-400 space-y-1">
+                        <div>• <strong className="text-slate-200">- (Minimize):</strong> Hides Angel AI to the Windows System Tray, keeping background security sentries and the global <code className="text-cyan-400">Alt + Space</code> hotkey active.</div>
+                        <div>• <strong className="text-slate-200">X (Close):</strong> Cleanly terminates and exits the entire Angel AI application process.</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 2: THEMES (UI THEME, 4 INTERACTIVE 3D CORES & AMBIENT 3D STAGE) */}
+                {activeTab === "settings_support" && settingsSubTab === "themes" && (
+                  <div className="space-y-4">
+                    <div className="p-5 rounded-2xl bg-white/5 border border-cyan-400/30 space-y-3">
+                      <div className="text-sm font-bold text-white flex items-center gap-2">
+                        <Sparkles size={16} className="text-purple-400" />
+                        <span>{ui.labels.uiTheme}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        {[
+                          { id: "acrylic" as const, label: "Windows 11 Acrylic" },
+                          { id: "dark_glass" as const, label: "Dark Glassmorphism" },
+                        ].map((th) => (
+                          <button
+                            key={th.id}
+                            onClick={() => {
+                              setUiThemeStyle(th.id);
+                              localStorage.setItem("angel_ui_theme_style", th.id);
+                              showToast(`Theme set to ${th.label}`);
+                            }}
+                            className={`flex-1 py-2 px-3 rounded-xl border text-xs font-bold transition ${
+                              uiThemeStyle === th.id
+                                ? "bg-purple-500/20 border-purple-400 text-purple-200"
+                                : "bg-black/40 border-white/10 text-slate-400 hover:text-white"
+                            }`}
+                          >
+                            {th.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 3D CORE THEME SWITCHER (4 INTERACTIVE THREE.JS CORES) */}
+                    <div className="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-bold text-white flex items-center gap-2">
+                            <Sparkles size={16} className="text-cyan-400" />
+                            <span>3D Core Theme Switcher (4 Interactive Three.js Cores)</span>
+                          </div>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            Seamlessly morph between 4 real-time sci-fi cores with zero page reload.
+                          </p>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full text-[11px] font-mono font-bold bg-cyan-950/80 border border-cyan-400/40 text-cyan-300">
+                          ACTIVE: {coreTheme.replace('_', ' ').toUpperCase()}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        {[
+                          { id: "quantum_gyro", title: "Quantum Gyroscope Core", tag: "JARVIS Style", desc: "Concentric counter-rotating holographic rings with inner pulsating cyan energy core." },
+                          { id: "neural_synapse", title: "Living Neural Synapse", tag: "Cognitive Web", desc: "110 interconnected synaptic nodes with dynamic lightning filaments." },
+                          { id: "orbital_earth", title: "Satellite Orbital Earth", tag: "Day/Night Orbit", desc: "Orbital Earth with day/night solar lighting, clouds, Moon, and ISS station." },
+                          { id: "volumetric_hologram", title: "Volumetric Hologram", tag: "Particle Lattice", desc: "1,800 undulating waveform particles with traversing laser scan plane." },
+                        ].map((core) => (
+                          <div
+                            key={core.id}
+                            onClick={() => handleSelectCoreTheme(core.id)}
+                            className={`p-4 rounded-xl border cursor-pointer transition flex flex-col justify-between ${
+                              coreTheme === core.id
+                                ? "bg-cyan-950/40 border-cyan-400 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]"
+                                : "bg-black/30 border-white/10 text-slate-300 hover:border-white/20 hover:bg-white/[0.03]"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <div>
+                                <div className="text-xs font-bold text-white">{core.title}</div>
+                                <span className="text-[9px] font-mono text-cyan-300">{core.tag}</span>
+                              </div>
+                              {coreTheme === core.id && <Check size={16} className="text-cyan-400 shrink-0" />}
+                            </div>
+                            <p className="text-[11px] text-slate-400 leading-relaxed">{core.desc}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Ambient 3D Stage HUD Tuning */}
+                    <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                      <div className="text-sm font-semibold text-white flex items-center justify-between">
+                        <span>Ambient 3D Stage HUD Tuning</span>
+                        <span className="text-xs font-mono text-cyan-400">HoloEarthStage</span>
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-xs text-slate-300 mb-1">
+                          <span>Background Opacity: {Math.round(earthOpacity * 100)}%</span>
+                          <span className="text-[11px] text-slate-400 font-mono">Default: 50%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="1.0"
+                          step="0.05"
+                          value={earthOpacity}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setEarthOpacity(val);
+                            localStorage.setItem("angel_earth_opacity", val.toString());
+                            dispatchEarthConfig(earthScale, weatherFx, val);
+                          }}
+                          className="w-full accent-cyan-400 bg-slate-800"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-xs text-slate-300 mb-1">
+                          <span>3D Core Size / Scale (All 4 Cores): {earthScale.toFixed(2)}x</span>
+                          <span className="text-[11px] text-slate-400 font-mono">Range: 0.5x – 1.8x</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="1.8"
+                          step="0.05"
+                          value={earthScale}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setEarthScale(val);
+                            localStorage.setItem("angel_earth_scale", val.toString());
+                            dispatchEarthConfig(val, weatherFx, earthOpacity);
+                          }}
+                          className="w-full accent-cyan-400 bg-slate-800"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3 pt-1">
+                        <input
+                          type="checkbox"
+                          id="weatherFxSettings"
+                          checked={weatherFx}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setWeatherFx(val);
+                            localStorage.setItem("angel_earth_weather_fx", val.toString());
+                            dispatchEarthConfig(earthScale, val, earthOpacity);
+                          }}
+                          className="rounded accent-cyan-400"
+                        />
+                        <label htmlFor="weatherFxSettings" className="text-xs text-slate-300 cursor-pointer">
+                          Real-Time Global Weather FX (Day/Night Solar Angle &amp; Polar Aurora)
+                        </label>
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-xs text-slate-300 mb-1">
+                          <span>Rotation Velocity: {(earthSpeed * 1000).toFixed(1)}x rad/frame</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.0002"
+                          max="0.003"
+                          step="0.0002"
+                          value={earthSpeed}
+                          onChange={(e) => setEarthSpeed(parseFloat(e.target.value))}
+                          className="w-full accent-cyan-400 bg-slate-800"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3 pt-1">
+                        <input
+                          type="checkbox"
+                          id="showCelestialSettings"
+                          checked={showCelestial}
+                          onChange={(e) => setShowCelestial(e.target.checked)}
+                          className="rounded accent-cyan-400"
+                        />
+                        <label htmlFor="showCelestialSettings" className="text-xs text-slate-300 cursor-pointer">
+                          Render Orbiting Moon &amp; ISS Space Station
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 3: LANGUAGE */}
+                {activeTab === "settings_support" && settingsSubTab === "language" && (
+                  <div className="p-5 rounded-2xl bg-white/5 border border-cyan-400/30 space-y-4">
+                    <div className="text-sm font-bold text-white flex items-center gap-2">
+                      <Languages size={16} className="text-cyan-400" />
+                      <span>{ui.labels.uiLanguage}</span>
+                    </div>
+                    <p className="text-xs text-slate-400">
+                      Switch the dashboard &amp; Menu Control Center interface between English and தமிழ் (Tamil).
+                    </p>
+                    <div className="flex gap-2">
+                      {(
+                        [
+                          { id: "en", label: "English" },
+                          { id: "ta", label: "தமிழ் (Tamil)" },
+                        ] as Array<{ id: UiLanguage; label: string }>
+                      ).map((l) => (
+                        <button
+                          key={l.id}
+                          onClick={() => {
+                            setUiLang(l.id);
+                            showToast(`UI Language switched to ${l.label}`);
+                          }}
+                          className={`flex-1 py-2.5 px-3 rounded-xl border text-xs font-bold transition ${
+                            uiLang === l.id
+                              ? "bg-cyan-500/20 border-cyan-400 text-cyan-200"
+                              : "bg-black/40 border-white/10 text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          {l.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* SUB-TAB 8: SUPPORT & DIAGNOSTICS */}
+                {activeTab === "settings_support" && settingsSubTab === "support" && (
+                <div className="p-5 rounded-2xl bg-white/5 border border-cyan-400/30 space-y-4">
+                  <div className="text-sm font-bold text-white flex items-center gap-2">
+                    <LifeBuoy size={16} className="text-emerald-400" />
+                    <span>Support &amp; Diagnostics</span>
+                  </div>
+
+                  {/* A-to-Z Project Analysis Report & Customer Support Diagnostics */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-white/10">
+                    <div className="p-3.5 rounded-xl bg-black/40 border border-white/10 space-y-2">
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <FileText size={14} className="text-cyan-400" />
+                        <span>{ui.labels.projectReport}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Inspect complete A-to-Z architecture across Rust backend, Three.js/2D stages, Supabase RLS, and OmniRoute.
+                      </p>
+                      <button
+                        onClick={() => setShowProjectReport((v) => !v)}
+                        className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-bold"
+                      >
+                        {showProjectReport ? "Hide Analysis Report" : "View A-to-Z Report"}
+                      </button>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-black/40 border border-white/10 space-y-2">
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <LifeBuoy size={14} className="text-emerald-400" />
+                        <span>{ui.labels.customerSupport}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Angel AI v2.0.0 • Support: support@gracechurch.org • Zero-Python Sovereign Build
+                      </p>
+                      <button
+                        onClick={() => {
+                          const bundle = {
+                            version: "2.0.0",
+                            timestamp: new Date().toISOString(),
+                            uiLang,
+                            theme: uiThemeStyle,
+                            smartAutoRouting,
+                            providersCount: providers.length,
+                            telemetry,
+                          };
+                          const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `angel-diagnostics-${Date.now()}.json`;
+                          a.click();
+                          showToast("Diagnostic bundle exported!");
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-200 text-xs font-bold"
+                      >
+                        {ui.labels.exportDiagnostics}
+                      </button>
+                    </div>
+                  </div>
+
+                  {showProjectReport && (
+                    <div className="p-3.5 rounded-xl bg-slate-900/90 border border-cyan-400/30 text-[11px] text-slate-300 space-y-1 font-mono">
+                      <div>• Frontend: React 19 + TypeScript + Vite + Tailwind CSS + Three.js + Konva</div>
+                      <div>• Backend: Tauri v2 (Rust MSVC, CREATE_NO_WINDOW = 0x08000000, Win32 Hotkey/Tray/OS Control)</div>
+                      <div>• Voice &amp; Vision: @ricky0123/vad-react (1200ms) + Sarvam AI + Gemini Multimodal + Screen Vision</div>
+                      <div>• Memory &amp; Sync: Supabase Auth (Gmail OAuth) + pgvector RLS + Realtime Call/Clipboard Bridge</div>
+                      <div>• Studios &amp; Games: AnyCraft Studio, Motion Studio, 3D Studio, Voice Chess, Ludo, Tamil Riddles</div>
+                    </div>
+                  )}
+                </div>
+                )}
+
+                {/* SUB-TAB 4: MULTI-CLOUD STORAGE & GITHUB BACKUP */}
+                {(activeTab === "api_keys" || settingsSubTab === "multicloud") && (
+                  <div className="space-y-6">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
                     <Cloud size={18} className="text-cyan-400" />
@@ -3059,11 +3573,13 @@ export function MenuControlCenterWindow({
                     <span>Save Cloud & Storage Configuration</span>
                   </button>
                 </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* 4. AI VOICE & SPEECH TAB */}
-            {activeTab === "voice" && (
+            {/* 4. AVATAR & VOICE STUDIO TAB */}
+            {(activeTab === "avatar_voice" || activeTab === "voice") && (
               <div className="space-y-6 max-w-3xl">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -3624,9 +4140,45 @@ export function MenuControlCenterWindow({
               </div>
             )}
 
-            {/* 5. UNIVERSAL ZERO-PYTHON PLUGIN FORGE STUDIO */}
-            {activeTab === "plugins" && (
+            {/* 5. TOOLS, PLUGINS & SMART PROJECT ADVISOR */}
+            {(activeTab === "tools" || activeTab === "plugins") && (
               <div className="space-y-6 max-w-3xl">
+                {/* SMART PROJECT TOOL ADVISOR */}
+                <div className="p-5 rounded-2xl bg-white/5 border border-cyan-400/30 space-y-3">
+                  <div className="text-sm font-bold text-white flex items-center gap-2">
+                    <Sparkles size={16} className="text-cyan-400" />
+                    <span>{ui.labels.projectAdvisor}</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Inspects your active workspace (<code className="text-cyan-300">Project_Angel_Tauri</code> / <code className="text-cyan-300">automobile-erp</code>) and recommends one-click zero-Python tools.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    {[
+                      {
+                        name: "Grace Church Member & Offering Sync",
+                        target: "Project_Angel_Tauri / Grace Church",
+                        desc: "One-click Supabase offering summary & WhatsApp greeting tool.",
+                      },
+                      {
+                        name: "Automobile ERP Invoice & GST Inspector",
+                        target: "automobile-erp",
+                        desc: "Fast parts inventory & billing validation helper for ERP workflows.",
+                      },
+                    ].map((rec) => (
+                      <div key={rec.name} className="p-3 rounded-xl bg-black/40 border border-white/10 space-y-1.5">
+                        <div className="text-xs font-bold text-white">{rec.name}</div>
+                        <div className="text-[10px] font-mono text-cyan-300">{rec.target}</div>
+                        <p className="text-[11px] text-slate-400">{rec.desc}</p>
+                        <button
+                          onClick={() => showToast(`Recommended tool "${rec.name}" added to active registry!`)}
+                          className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-[10.5px] font-bold"
+                        >
+                          Install Recommended Tool
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
                 {/* Header */}
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -4129,7 +4681,7 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 6. AI LEARNING & MEMORY TAB */}
-            {activeTab === "memory" && (
+            {((activeTab === "settings_support" && settingsSubTab === "memory") || activeTab === "memory") && (
               <div className="space-y-6 max-w-3xl">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -4266,7 +4818,7 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 7. SKILL FORGE TAB */}
-            {activeTab === "skills" && (
+            {(activeTab === "tools" || activeTab === "skills") && (
               <div className="space-y-6 max-w-3xl">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
@@ -4471,7 +5023,7 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 8. AUTOMATION WORKFLOWS TAB */}
-            {activeTab === "workflows" && (
+            {(activeTab === "tools" || activeTab === "workflows") && (
               <div className="space-y-6 max-w-3xl">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -4543,7 +5095,7 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 9. CROSS-DEVICE BRIDGE TAB */}
-            {activeTab === "bridge" && (
+            {((activeTab === "settings_support" && settingsSubTab === "crossdevice") || activeTab === "bridge") && (
               <div className="space-y-6 max-w-3xl">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -4642,13 +5194,13 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 10. AI ANTIVIRUS & SMART FIREWALL TAB */}
-            {activeTab === "security" && (
+            {(activeTab === "cybershield" || activeTab === "security") && (
               <div className="space-y-6 max-w-3xl">
                 <div className="flex items-center justify-between">
                   <div>
                     <h2 className="text-lg font-bold text-white flex items-center gap-2">
                       <ShieldCheck size={18} className="text-emerald-400" />
-                      <span>AI Antivirus & Smart Firewall (K7 Aegis)</span>
+                      <span>AI Antivirus & Smart Firewall (Angel CyberShield)</span>
                     </h2>
                     <p className="text-xs text-slate-400 mt-1">
                       Real-time download sentry, zero-day threat quarantine vault, and 1-click internet lockdown.
@@ -4659,7 +5211,7 @@ export function MenuControlCenterWindow({
                     className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 font-bold text-xs flex items-center gap-1.5 transition"
                   >
                     <ExternalLink size={13} />
-                    <span>Open K7 Window</span>
+                    <span>Open CyberSecurity Window</span>
                   </button>
                 </div>
 
@@ -4734,7 +5286,7 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 11. OS DOCTOR TAB */}
-            {activeTab === "doctor" && (
+            {(activeTab === "cybershield" || activeTab === "doctor") && (
               <div className="space-y-6 max-w-3xl">
                 <div>
                   <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -4793,7 +5345,7 @@ export function MenuControlCenterWindow({
             )}
 
             {/* 12. AI USAGE & TELEMETRY TAB */}
-            {activeTab === "telemetry" && (
+            {((activeTab === "settings_support" && settingsSubTab === "usage") || activeTab === "telemetry") && (
               <div className="space-y-6 max-w-3xl">
                 <div className="flex items-center justify-between">
                   <div>

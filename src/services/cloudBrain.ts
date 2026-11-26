@@ -77,6 +77,20 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     capabilities: ["🔄 AUTO FAILOVER", "⚡ SPEED ROUTING", "🔧 TOOL CALLING", "≋ STREAMING"],
   },
   {
+    id: "antigravity",
+    name: "Antigravity",
+    category: "cloud",
+    apiKey: "",
+    endpoint: "https://generativelanguage.googleapis.com",
+    defaultModel: "gemini-2.5-pro",
+    availableModels: ["gemini-2.5-pro", "gemini-2.0-flash", "claude-3-7-sonnet-latest", "gpt-4.1"],
+    enabled: true,
+    status: "missing_key",
+    description: "Antigravity Multi-Agent Cloud Brain — deep reasoning, code synthesis & tool orchestration.",
+    consoleUrl: "https://aistudio.google.com/app/apikey",
+    capabilities: ["🔧 TOOL CALLING", "≋ STREAMING", "🧠 AGENT ORCHESTRATION", "</> CODE GEN"],
+  },
+  {
     id: "gemini",
     name: "Google Gemini",
     category: "cloud",
@@ -2132,6 +2146,7 @@ Never use destructive commands (rm, del, format).`;
 
     // Dynamic Intent-based routing order (Cloud first for fast online response, Ollama offline fallback)
     let priorityOrder = [
+      "antigravity",
       "gemini",
       "groq",
       "freellmapi",
@@ -2145,14 +2160,17 @@ Never use destructive commands (rm, del, format).`;
     ];
 
     if (classification === "Quick Lookup") {
-      priorityOrder = ["gemini", "groq", "freellmapi", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["antigravity", "gemini", "groq", "freellmapi", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Code / Reverse-Engineering") {
-      priorityOrder = ["gemini", "groq", "deepseek", "freellmapi", "openrouter", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["antigravity", "gemini", "groq", "deepseek", "freellmapi", "openrouter", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Defensive Security Audit") {
-      priorityOrder = ["gemini", "groq", "anthropic", "openai", "deepseek", "freellmapi", "openrouter", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["antigravity", "gemini", "groq", "anthropic", "openai", "deepseek", "freellmapi", "openrouter", "github", "ollama", "local_lmstudio"];
     } else if (classification === "Tamil/Tanglish") {
-      priorityOrder = ["gemini", "groq", "freellmapi", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
+      priorityOrder = ["antigravity", "gemini", "groq", "freellmapi", "openrouter", "deepseek", "openai", "anthropic", "github", "ollama", "local_lmstudio"];
     }
+
+    const geminiFallbackKey =
+      providers.find((p) => p.id === "gemini")?.apiKey || localStorage.getItem("angel_gemini_key") || "";
 
     const isConfigured = (p: AIProviderConfig) => {
       if (!p.enabled) return false;
@@ -2162,6 +2180,12 @@ Never use destructive commands (rm, del, format).`;
       if (p.id === "local_lmstudio") {
         const isExplicit = localStorage.getItem("angel_lmstudio_enabled") === "true";
         return Boolean(p.enabled && isExplicit && p.endpoint && p.endpoint.trim() && p.status === "verified");
+      }
+      if (p.id === "antigravity") {
+        return extractKeysList(p.apiKey).length > 0 || extractKeysList(geminiFallbackKey).length > 0;
+      }
+      if (p.id === "gemini") {
+        return extractKeysList(p.apiKey).length > 0 || extractKeysList(geminiFallbackKey).length > 0;
       }
       return extractKeysList(p.apiKey).length > 0;
     };
@@ -2175,6 +2199,11 @@ Never use destructive commands (rm, del, format).`;
         }
       }
     } else {
+      if (targetProvider.category === "cloud" && !isConfigured(targetProvider)) {
+        throw new Error(
+          `${targetProvider.name} (Online Brain) requires an API key. Add your key in Menu -> AI Brain or switch to Auto / Offline Engine.`
+        );
+      }
       executionList.push(targetProvider);
       if (autoFailover) {
         for (const pid of priorityOrder) {
@@ -2189,7 +2218,7 @@ Never use destructive commands (rm, del, format).`;
     }
 
     if (executionList.length === 0) {
-      const anyEnabled = providers.filter((p) => p.id !== "auto" && p.enabled);
+      const anyEnabled = providers.filter((p) => p.id !== "auto" && p.enabled && isConfigured(p));
       executionList.push(...anyEnabled);
     }
 
@@ -2204,6 +2233,14 @@ Never use destructive commands (rm, del, format).`;
 
         if (provider.id === "gemini") {
           fullText = await this.queryGemini(provider, userPrompt, screenImageBase64, systemInstruction, options);
+        } else if (provider.id === "antigravity") {
+          const effectiveKey = extractKeysList(provider.apiKey).length > 0 ? provider.apiKey : geminiFallbackKey;
+          const effectiveProvider = { ...provider, apiKey: effectiveKey };
+          if (!effectiveProvider.endpoint || effectiveProvider.endpoint.includes("generativelanguage.googleapis.com")) {
+            fullText = await this.queryGemini(effectiveProvider, userPrompt, screenImageBase64, systemInstruction, options);
+          } else {
+            fullText = await this.queryOpenAICompatible(effectiveProvider, userPrompt, systemInstruction, temperature, options);
+          }
         } else if (provider.id === "anthropic") {
           fullText = await this.queryAnthropic(provider, userPrompt, systemInstruction, temperature, options);
         } else if (provider.id === "ollama") {
@@ -2254,3 +2291,49 @@ Never use destructive commands (rm, del, format).`;
 }
 
 export const cloudBrain = new CloudBrainService();
+
+export interface VerifiedDashboardModel {
+  id: string;
+  label: string;
+  category: "router" | "online" | "offline";
+  modelId: string;
+}
+
+/**
+ * Dynamically populates the main dashboard model selector strictly from configured / verified providers
+ * (e.g., Auto Smart Router, Gemini live-discovered models, Groq, OpenRouter, Claude, Ollama, FreeLLMAPI),
+ * ensuring dead or unconfigured models are never shown as broken defaults.
+ */
+export function getVerifiedDashboardModels(): VerifiedDashboardModel[] {
+  const providers = loadAIProviders();
+  const cfg = loadAngelConfig();
+  const list: VerifiedDashboardModel[] = [
+    {
+      id: "auto",
+      label: "Auto Smart Router (Online + Offline)",
+      category: "router",
+      modelId: "auto-smart",
+    },
+  ];
+
+  for (const p of providers) {
+    if (p.id === "auto" || !p.enabled) continue;
+    const hasKey =
+      Boolean(p.apiKey?.trim()) ||
+      ((p.id === "gemini" || p.id === "antigravity") && Boolean(cfg.geminiKey?.trim()));
+    const isLocal = p.category === "local";
+    const isVerified = p.status === "verified" || p.status === "ready" || p.status === "local_ready";
+
+    if (isLocal || hasKey || isVerified) {
+      const primaryModel = p.defaultModel || p.availableModels?.[0] || p.id;
+      list.push({
+        id: p.id,
+        label: `${p.name} (${primaryModel})`,
+        category: isLocal ? "offline" : "online",
+        modelId: primaryModel,
+      });
+    }
+  }
+
+  return list;
+}

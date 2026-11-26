@@ -393,20 +393,47 @@ export class AngelVoiceEngine {
 
       const voiceCfg = loadAngelVoiceConfig();
       const vol = Math.max(0, Math.min(1, (voiceCfg.volume ?? 85) / 100));
-      const rate = Math.max(0.5, Math.min(2.0, voiceCfg.speed ?? 1.0));
-      const gender = voiceCfg.voiceGender || (voiceCfg.voicePersona?.includes("Valluvar") || voiceCfg.voicePersona?.includes("Prabhat") ? "male" : "female");
+      const rawRate = Math.max(0.7, Math.min(1.5, voiceCfg.speed ?? 0.98));
 
-      // Split into sentence-level chunks for immediate microsecond streaming speech
+      // Natural clause-aware segmentation: split on sentence boundaries first,
+      // then gently break long clauses (> 95 chars) at commas/semicolons/dashes for natural breathing.
       const rawSentences = cleanText.match(/[^.!?।\n]+[.!?।\n]*/g);
-      const sentences = rawSentences && rawSentences.length > 0
+      const baseSentences = rawSentences && rawSentences.length > 0
         ? rawSentences.map((s) => s.trim()).filter((s) => s.length > 0)
         : [cleanText];
+
+      const sentences: string[] = [];
+      for (const s of baseSentences) {
+        if (s.length <= 95) {
+          sentences.push(s);
+        } else {
+          const clauses = s.match(/[^,;:\u2014\u2013]+[,;:\u2014\u2013]*/g);
+          if (clauses && clauses.length > 1) {
+            let buf = "";
+            for (const c of clauses) {
+              if ((buf + " " + c).trim().length > 95 && buf.trim().length > 0) {
+                sentences.push(buf.trim());
+                buf = c;
+              } else {
+                buf = (buf + " " + c).trim();
+              }
+            }
+            if (buf.trim()) sentences.push(buf.trim());
+          } else {
+            sentences.push(s);
+          }
+        }
+      }
+
+      const gender = voiceCfg.voiceGender || (voiceCfg.voicePersona?.includes("Valluvar") || voiceCfg.voicePersona?.includes("Prabhat") ? "male" : "female");
 
       for (let i = 0; i < sentences.length; i++) {
         if (this.currentSpeechSessionId !== sessionId || this.isMuted) break;
         const sentence = sentences[i];
         const hasTamil = /[\u0B80-\u0BFF]/.test(sentence);
         const targetLang = hasTamil || voiceCfg.languageMode === "ta-IN" ? "ta" : "en-IN";
+        // Slightly gentler rate for Tamil scripts to preserve natural syllable cadence
+        const rate = hasTamil ? Math.max(0.75, rawRate * 0.94) : rawRate;
 
         // Prewarm / prefetch subsequent sentence in parallel into disk cache
         if (i + 1 < sentences.length) {
@@ -438,7 +465,7 @@ export class AngelVoiceEngine {
             const chosenVoice = hasTamil
               ? gender === "male" ? "ta-IN-ValluvarNeural" : "ta-IN-PallaviNeural"
               : gender === "male" ? "en-IN-PrabhatNeural" : (voiceCfg.voicePersona || "en-IN-NeerjaNeural");
-            const ratePercent = Math.round(((voiceCfg.speed ?? 1.0) - 1.0) * 100);
+            const ratePercent = Math.round((rate - 1.0) * 100);
             const pitchHz = voiceCfg.pitch ?? 0;
             const base64Audio = await invoke<string>("synthesize_neural_tts", {
               text: sentence,
@@ -452,6 +479,12 @@ export class AngelVoiceEngine {
           } catch {
             await this.speakWebSpeech(sentence, hasTamil);
           }
+        }
+
+        // Natural breathing pause between clauses/sentences so output doesn't sound clipped
+        if (i + 1 < sentences.length && this.currentSpeechSessionId === sessionId && !this.isMuted) {
+          const pauseMs = /[.!?।]$/.test(sentence) ? 140 : 75;
+          await new Promise((r) => setTimeout(r, pauseMs));
         }
       }
     } catch (outerErr) {
@@ -535,9 +568,12 @@ export class AngelVoiceEngine {
     if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
 
+    const voiceCfg = loadAngelVoiceConfig();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = isTamil ? "ta-IN" : "en-IN";
-    utter.rate = isTamil ? 0.95 : 1.0;
+    const baseRate = Math.max(0.75, Math.min(1.4, voiceCfg.speed ?? 0.98));
+    utter.rate = isTamil ? Math.max(0.78, baseRate * 0.94) : baseRate;
+    utter.pitch = Math.max(0.85, Math.min(1.15, 1.0 + (voiceCfg.pitch ?? 0) / 100));
 
     const voices = window.speechSynthesis.getVoices();
     if (isTamil) {

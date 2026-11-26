@@ -35,7 +35,13 @@ import {
   Boxes,
 } from "lucide-react";
 import "./App.css";
-import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
+import {
+  CloudBrainService,
+  getVerifiedDashboardModels,
+  incrementUsageTelemetry,
+  VerifiedDashboardModel,
+} from "./services/cloudBrain";
+import { useUiStrings } from "./i18n/uiStrings";
 import { AngelVoiceEngine } from "./services/voiceEngine";
 import {
   AngelWorkspaceProfile,
@@ -47,13 +53,14 @@ import {
 import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import { CyberShieldSecuritySuite } from "./components/CyberShieldSecuritySuite";
 import { HoloEarthStage } from "./components/HoloEarthStage";
-import { VtuberAvatarStage } from "./components/VtuberAvatarStage";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
 import { WorkshopStagePanel } from "./components/WorkshopStagePanel";
 import { PermissionGateModal, PermissionRequest } from "./components/PermissionGateModal";
 import { ToolStoreModal } from "./components/ToolStoreModal";
 import { ArcadeTab } from "./components/arcade/ArcadeTab";
 import { DesktopCallBridgePopup } from "./components/DesktopCallBridgePopup";
+import { LibraryModal } from "./components/LibraryModal";
+import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { angelMcpClient } from "./services/mcpClient";
 import { detectStudioIntent, spawnStudio } from "./services/studioRouter";
 import { deviceSyncService } from "./services/deviceSyncService";
@@ -65,6 +72,9 @@ import {
   saveWorkshopBuild,
   getSavedWorkshopBuilds,
 } from "./services/workshopBuilder";
+import { ActionPayload, executeActionIntent } from "./services/actionExecutor";
+import { ActionResultCard } from "./components/ActionResultCard";
+import { runAutonomousAgent, shouldUseAutonomousAgent, UiActionArgs } from "./services/autonomousAgent";
 
 interface ChatMessage {
   id: string;
@@ -72,6 +82,8 @@ interface ChatMessage {
   text: string;
   timestamp: string;
   actionExecuted?: string;
+  actionPayload?: ActionPayload;
+  agentStep?: string;
 }
 
 interface ThreatAlertPayload {
@@ -98,20 +110,20 @@ export default function App() {
   const [workspaceProfile, setWorkspaceProfile] = useState<AngelWorkspaceProfile>(() =>
     resolveLocalFallbackProfile()
   );
-  const [petVisible, setPetVisible] = useState<boolean>(() => {
-    const saved = localStorage.getItem("angel_desktop_companion_enabled");
-    return saved === null ? true : saved === "true";
-  });
-
   useEffect(() => {
-    const saved = localStorage.getItem("angel_desktop_companion_enabled");
-    const enabled = saved === null ? true : saved === "true";
-    invoke("set_companion_visible", { visible: enabled }).catch(() => {});
+    invoke("set_companion_visible", { visible: false }).catch(() => {});
+    invoke("toggle_angel_pet", { visible: false }).catch(() => {});
   }, []);
   const [isSignedInSession, setIsSignedInSession] = useState(false);
   const [showToolStore, setShowToolStore] = useState(false);
   const [showArcadeTab, setShowArcadeTab] = useState(false);
-  const [ecoMode, setEcoMode] = useState<boolean>(() => {
+  const [showLibraryModal, setShowLibraryModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [showAccountModal, setShowAccountModal] = useState(false);
+  const [dashboardTheme, setDashboardTheme] = useState<"dark" | "light">(() => {
+    return localStorage.getItem("angel_dashboard_theme") === "light" ? "light" : "dark";
+  });
+  const [ecoMode] = useState<boolean>(() => {
     return localStorage.getItem("angel_eco_mode_offline") === "true";
   });
   const [closeBackupPrompt, setCloseBackupPrompt] = useState<{ count: number; busy: boolean; error?: string } | null>(null);
@@ -187,25 +199,46 @@ export default function App() {
     return () => window.removeEventListener("angel-earth-config", handleEarthConfig);
   }, []);
 
-  // AI Model Ladder Selector
+  // AI Model Ladder Selector (Live Verified Models Only)
+  const [ui] = useUiStrings();
+  const [verifiedModels, setVerifiedModels] = useState<VerifiedDashboardModel[]>(() =>
+    getVerifiedDashboardModels()
+  );
   const [selectedModel, setSelectedModel] = useState<string>(() => {
+    const models = getVerifiedDashboardModels();
     const saved = localStorage.getItem("angel_primary_model");
-    if (saved && (saved.includes("3.8") || saved === "gemini-3.8-flash" || saved === "gemini-2.5-flash")) {
-      localStorage.setItem("angel_primary_model", "gemini-2.5-pro");
-      return "gemini-2.5-pro";
+    if (saved && models.some((m) => m.id === saved || m.modelId === saved)) {
+      return saved;
     }
-    return saved || "Auto";
+    return models[0]?.id || "auto";
   });
   const [showModelDropdown, setShowModelDropdown] = useState(false);
 
   useEffect(() => {
+    const syncModels = () => {
+      const nextModels = getVerifiedDashboardModels();
+      setVerifiedModels(nextModels);
+      setSelectedModel((cur) => {
+        if (nextModels.some((m) => m.id === cur || m.modelId === cur)) return cur;
+        const fallback = nextModels[0]?.id || "auto";
+        localStorage.setItem("angel_primary_model", fallback);
+        return fallback;
+      });
+    };
     const handleModelChange = (e: any) => {
       if (e.detail?.model) {
         setSelectedModel(e.detail.model);
       }
+      syncModels();
     };
     window.addEventListener("angel-model-changed", handleModelChange);
-    return () => window.removeEventListener("angel-model-changed", handleModelChange);
+    window.addEventListener("angel-models-updated", syncModels);
+    window.addEventListener("storage", syncModels);
+    return () => {
+      window.removeEventListener("angel-model-changed", handleModelChange);
+      window.removeEventListener("angel-models-updated", syncModels);
+      window.removeEventListener("storage", syncModels);
+    };
   }, []);
 
   // Tools Selector
@@ -383,6 +416,51 @@ export default function App() {
     };
 
     setMessages([...updatedUserMsgs, initialAssistantMsg]);
+
+    // 0A. Direct Prompt / Voice Theme Toggle ("light mode", "dark mode", "டார்க் ஆ இருக்கு லைட் கலருக்கு மாத்து")
+    const isLightCmd = /லைட்|light\s*(mode|theme|color)|bright\s*theme/i.test(prompt);
+    const isDarkCmd = /டார்க்\s*(மோடு|கலர்|theme)|dark\s*(mode|theme|color)/i.test(prompt) && !isLightCmd;
+    if (isLightCmd || isDarkCmd) {
+      const nextTheme: "light" | "dark" = isLightCmd ? "light" : "dark";
+      setDashboardTheme(nextTheme);
+      localStorage.setItem("angel_dashboard_theme", nextTheme);
+      const confirmMsg =
+        nextTheme === "light"
+          ? "சரி ராஜா! டேஷ்போர்டு தீம் Light Mode-க்கு மாற்றப்பட்டுவிட்டது."
+          : "சரி ராஜா! டேஷ்போர்டு தீம் Dark Mode-க்கு மாற்றப்பட்டுவிட்டது.";
+      setMessages([
+        ...updatedUserMsgs,
+        {
+          id: assistantMsgId,
+          role: "assistant",
+          text: confirmMsg,
+          actionExecuted: `Dashboard Theme -> ${nextTheme.toUpperCase()}`,
+          timestamp: formattedTime,
+        },
+      ]);
+      setIsProcessing(false);
+      voiceRef.current?.speak(confirmMsg, () => setSpeaking(true), () => setSpeaking(false));
+      return;
+    }
+
+    // 0B. Direct Prompt Create Image ("இமேஜ் கிரியேட் பண்ணு", "create image", "generate image")
+    if (/இமேஜ்\s*கிரியேட்|படம்\s*உருவாக்கு|create\s*(an?\s*)?image|generate\s*(an?\s*)?image/i.test(prompt)) {
+      spawnStudio("anycraft", prompt).catch(() => {});
+      const imgConfirm = `சரி ராஜா! "${prompt}" என்பதற்கான **AnyCraft Image Studio** திறக்கப்பட்டுவிட்டது. அங்கே உங்கள் படத்தை உருவாக்கி திருத்தலாம்!`;
+      setMessages([
+        ...updatedUserMsgs,
+        {
+          id: assistantMsgId,
+          role: "assistant",
+          text: imgConfirm,
+          actionExecuted: "AnyCraft Image Studio Launched",
+          timestamp: formattedTime,
+        },
+      ]);
+      setIsProcessing(false);
+      voiceRef.current?.speak(imgConfirm, () => setSpeaking(true), () => setSpeaking(false));
+      return;
+    }
 
     try {
       const promptLower = prompt.toLowerCase();
@@ -640,6 +718,9 @@ export default function App() {
         "செய்தி",
         "செய்திகள்",
         "நியூஸ்",
+        "நியூஸ சொல்லு",
+        "இன்னைக்கு இந்த நியூஸ",
+        "இன்னைக்கு நியூஸ்",
         "inaikku news",
         "today news",
         "latest news",
@@ -647,6 +728,7 @@ export default function App() {
         "current news",
         "tell me news",
         "daily news",
+        "news sollu",
       ];
 
       const isNewsQuery = newsKeywords.some((kw) => {
@@ -690,6 +772,32 @@ export default function App() {
         } catch (newsErr) {
           console.warn("Live news fetcher notice:", newsErr);
         }
+      }
+
+      // 0.5 True Action & Automation Engine (Weather/Reminders Card, Code/Mini-App Builder, App Co-Pilot)
+      const actionResult = await executeActionIntent(prompt);
+      if (actionResult.handled) {
+        const actionMsgs = [
+          ...updatedUserMsgs,
+          {
+            id: assistantMsgId,
+            role: "assistant" as const,
+            text: actionResult.replyText,
+            actionExecuted: actionResult.actionLabel,
+            actionPayload: actionResult.payload,
+            timestamp: formattedTime,
+          },
+        ];
+        setMessages(actionMsgs);
+        if (activeSessionId) {
+          setSessions((prev) => {
+            const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: actionMsgs } : s));
+            try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+            return sUpdated;
+          });
+        }
+        voiceRef.current?.speak(actionResult.replyText, () => setSpeaking(true), () => setSpeaking(false));
+        return;
       }
 
       // 1. Check local Rust OS reflex if in Task mode or standard prompt
@@ -888,6 +996,73 @@ NEVER produce any Python (.py) code or dependencies.`;
         console.warn("SkillForge trigger check notice:", skillErr);
       }
 
+      // 1.5 Universal Autonomous Agent Loop (Think -> Act -> Observe across 4 OS/File/UI Tools)
+      if (shouldUseAutonomousAgent(prompt, workspaceMode)) {
+        const agentRes = await runAutonomousAgent(prompt, {
+          brain,
+          workspaceMode,
+          screenBase64: screenB64,
+          onStepUpdate: (u) => {
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantMsgId ? { ...m, agentStep: u.detail } : m))
+            );
+          },
+          onUiAction: (args: UiActionArgs) => {
+            const performed: string[] = [];
+            if (args.set_theme === "light" || args.set_theme === "dark") {
+              setDashboardTheme(args.set_theme);
+              localStorage.setItem("angel_dashboard_theme", args.set_theme);
+              performed.push(`theme=${args.set_theme}`);
+            }
+            if (args.open_section === "library") {
+              setShowLibraryModal(true);
+              performed.push("opened library");
+            } else if (args.open_section === "3d_workshop") {
+              setWorkspaceMode("workshop");
+              performed.push("opened 3d_workshop");
+            } else if (args.open_section === "settings") {
+              setActiveModal({ type: "menu", tab: "settings_support" });
+              performed.push("opened settings");
+            } else if (args.open_section === "cybershield") {
+              setActiveModal({ type: "security", tab: "cybershield" });
+              performed.push("opened cybershield");
+            }
+            if (args.speak && !voiceMuted) {
+              voiceRef.current?.speak(args.speak, () => setSpeaking(true), () => setSpeaking(false));
+              performed.push("spoke");
+            }
+            return performed.length > 0 ? `UI updated: ${performed.join(", ")}` : "No UI change applied.";
+          },
+        });
+
+        const agentMsgs = [
+          ...updatedUserMsgs,
+          {
+            id: assistantMsgId,
+            role: "assistant" as const,
+            text: agentRes.replyText,
+            actionExecuted:
+              agentRes.stepsUsed.length > 0
+                ? `Autonomous Agent (${agentRes.stepsUsed.join(" -> ")})`
+                : undefined,
+            agentStep: agentRes.stepsUsed.length > 0 ? `Done (${agentRes.stepsUsed.join(" -> ")})` : "Done",
+            timestamp: formattedTime,
+          },
+        ];
+        setMessages(agentMsgs);
+        if (activeSessionId) {
+          setSessions((prev) => {
+            const sUpdated = prev.map((s) => (s.id === activeSessionId ? { ...s, messages: agentMsgs } : s));
+            try { localStorage.setItem("angel_chat_sessions", JSON.stringify(sUpdated)); } catch {}
+            return sUpdated;
+          });
+        }
+        if (!voiceMuted && agentRes.replyText) {
+          voiceRef.current?.speak(agentRes.replyText, () => setSpeaking(true), () => setSpeaking(false));
+        }
+        return;
+      }
+
       // 2. Query Gemini/Cloud Brain with streaming and 45s timeout safeguard
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(
@@ -1065,7 +1240,13 @@ NEVER produce any Python (.py) code or dependencies.`;
   };
 
   return (
-    <div className="h-screen w-screen flex bg-slate-950 text-white select-none overflow-hidden font-sans relative">
+    <div
+      className={`h-screen w-screen flex select-none overflow-hidden font-sans relative transition-colors duration-300 ${
+        dashboardTheme === "light"
+          ? "bg-slate-100 text-slate-900"
+          : "bg-slate-950 text-white"
+      }`}
+    >
       {/* 1. AMBIENT 3D SATELLITE EARTH BACKGROUND LAYER (Paused in Local Eco Mode) */}
       {!ecoMode && (
         <div
@@ -1076,17 +1257,6 @@ NEVER produce any Python (.py) code or dependencies.`;
         </div>
       )}
 
-      {/* 1.5 SLEEK 2D ANIMATED COMPANION STAGE (8 States, Lip-Sync & Cursor Tracking) */}
-      <div className="fixed bottom-24 right-6 z-10 w-[220px] h-[290px] pointer-events-none hidden lg:block">
-        <VtuberAvatarStage
-          speaking={speaking}
-          listening={listening}
-          thinking={isProcessing}
-          alertActive={Boolean(activeThreat)}
-          compact={true}
-        />
-      </div>
-
       {/* 2. LEFT COLLAPSIBLE SIDEBAR */}
       <GeminiSidebar
         collapsed={sidebarCollapsed}
@@ -1095,13 +1265,18 @@ NEVER produce any Python (.py) code or dependencies.`;
         onOpenMenu={() => setActiveModal({ type: "menu", tab: "general" })}
         onSelectPrompt={(p) => handleSendMessage(p)}
         onOpenWorkshop={() => setWorkspaceMode("workshop")}
+        onOpenLibrary={() => setShowLibraryModal(true)}
+        onOpenSearch={() => setShowSearchModal(true)}
+        onOpenAccountModal={() => setShowAccountModal(true)}
+        userName={workspaceProfile.fullName}
+        userSubtitle={isSignedInSession ? `${workspaceProfile.email}` : "Sovereign • Local"}
         sessions={sessions}
         currentChatId={currentSessionId}
         onSelectSession={handleSelectSession}
       />
 
       {/* 3. MAIN WORKSPACE */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative z-10 backdrop-blur-sm">
+      <div className="flex-1 flex flex-col h-full overflow-hidden relative z-10">
         {/* TOP HEADER BAR */}
         <header
           data-tauri-drag-region
@@ -1118,97 +1293,13 @@ NEVER produce any Python (.py) code or dependencies.`;
           <div className="flex items-center gap-2">
             <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-mono text-cyan-200">
               <Clock size={12} className="text-cyan-400" />
-              <span>{formattedTime}</span>
-              <span className="text-slate-400 text-[10px]">• {formattedDate} (IST)</span>
+              <span>{ui.labels.online}</span>
+              <span className="text-slate-400 text-[10px]">• {formattedTime} • {formattedDate} (IST)</span>
             </span>
           </div>
 
-          {/* Right actions */}
+          {/* Right actions (Clean & Uncluttered Core Session/Window Controls) */}
           <div className="flex items-center gap-2">
-            {/* Multi-User Gmail Auth & Workspace Isolation Pill */}
-            <button
-              onClick={async () => {
-                if (isSignedInSession) {
-                  await signOutWorkspace();
-                } else {
-                  const res = await signInWithGmail();
-                  if (!res.ok && res.error) {
-                    setMicErrorMessage(res.error);
-                  }
-                }
-              }}
-              title={
-                isSignedInSession
-                  ? `Signed in as ${workspaceProfile.email} (${workspaceProfile.role}) — Click to sign out`
-                  : "Sign in with Google (Gmail) for isolated cloud workspace"
-              }
-              className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 transition"
-            >
-              <User size={13} className={workspaceProfile.isRajaAdmin ? "text-emerald-400" : "text-cyan-400"} />
-              <span className="hidden md:inline max-w-[140px] truncate">
-                {isSignedInSession
-                  ? `${workspaceProfile.fullName} (${workspaceProfile.isRajaAdmin ? "Admin" : "User"})`
-                  : "Gmail Login"}
-              </span>
-            </button>
-
-            {/* Desktop Companion Avatar Toggle */}
-            <button
-              onClick={() => {
-                const next = !petVisible;
-                setPetVisible(next);
-                localStorage.setItem("angel_desktop_companion_enabled", next.toString());
-                invoke("set_companion_visible", { visible: next }).catch(() => {});
-              }}
-              title={petVisible ? "Hide Desktop Companion Avatar" : "Show Desktop Companion Avatar"}
-              className={`px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 transition ${
-                petVisible
-                  ? "bg-cyan-500/15 border-cyan-400/50 text-cyan-200"
-                  : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
-              }`}
-            >
-              <Sparkles size={13} className="text-cyan-400" />
-              <span className="hidden lg:inline">Companion</span>
-            </button>
-
-            {/* Hot-Reloadable Tool Store Button */}
-            <button
-              onClick={() => setShowToolStore(true)}
-              title="Open Hot-Reloadable Tool Store (angel_tools)"
-              className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 transition"
-            >
-              <Boxes size={13} className="text-purple-400" />
-              <span className="hidden xl:inline">Tools</span>
-            </button>
-
-            {/* Chill & Arcade Companion Button */}
-            <button
-              onClick={() => setShowArcadeTab(true)}
-              title="Open Chill & Arcade (Chess, Ludo, Voice Games)"
-              className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 transition"
-            >
-              <Sparkles size={13} className="text-amber-400" />
-              <span className="hidden xl:inline">Arcade</span>
-            </button>
-
-            {/* 1-Click Local Eco Mode Toggle */}
-            <button
-              onClick={() => {
-                const next = !ecoMode;
-                setEcoMode(next);
-                localStorage.setItem("angel_eco_mode_offline", next.toString());
-              }}
-              title={ecoMode ? "Local Eco Mode Active (Ollama + Web Speech, 3D Paused)" : "Enable Local Eco Mode (Power/Battery Saver)"}
-              className={`px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 transition ${
-                ecoMode
-                  ? "bg-emerald-500/20 border-emerald-400/50 text-emerald-200"
-                  : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
-              }`}
-            >
-              <Cpu size={13} className={ecoMode ? "text-emerald-400" : "text-slate-400"} />
-              <span className="hidden xl:inline">{ecoMode ? "Eco On" : "Eco"}</span>
-            </button>
-
             {/* Get App Companion Button */}
             <button
               onClick={() => setShowGetAppModal(true)}
@@ -1334,7 +1425,7 @@ NEVER produce any Python (.py) code or dependencies.`;
             <>
               {/* CASE A: No messages yet -> Clean Hero Greeting */}
               {messages.length === 0 ? (
-                <div className="flex-1 flex flex-col items-center justify-center text-center max-w-2xl mx-auto my-auto">
+                <div className="flex-1 flex flex-col items-center justify-end pb-5 sm:pb-7 text-center max-w-2xl mx-auto">
                   <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white drop-shadow-md">
                     Where should we start?
                   </h1>
@@ -1357,8 +1448,13 @@ NEVER produce any Python (.py) code or dependencies.`;
                         }`}
                       >
                         {msg.role === "assistant" && (
-                          <div className="flex items-center gap-2 mb-2 pb-1.5 border-b border-white/10">
+                          <div className="flex flex-wrap items-center gap-2 mb-2 pb-1.5 border-b border-white/10">
                             <span className="text-cyan-400 font-extrabold text-xs">✦ Angel AI</span>
+                            {msg.agentStep && (
+                              <span className="px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-400/40 text-[10px] font-mono font-bold text-cyan-200">
+                                {msg.agentStep}
+                              </span>
+                            )}
                             {msg.actionExecuted && (
                               <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-[10px] font-bold text-emerald-300">
                                 {msg.actionExecuted}
@@ -1368,6 +1464,10 @@ NEVER produce any Python (.py) code or dependencies.`;
                         )}
 
                         <p className="whitespace-pre-wrap">{msg.text || (isProcessing ? "Thinking..." : "")}</p>
+
+                        {msg.role === "assistant" && msg.actionPayload && (
+                          <ActionResultCard payload={msg.actionPayload} />
+                        )}
 
                         {/* Assistant Message Actions */}
                         {msg.role === "assistant" && msg.text && (
@@ -1538,41 +1638,64 @@ NEVER produce any Python (.py) code or dependencies.`;
                       setShowPlusMenu(false);
                       setShowToolsDropdown(false);
                     }}
-                    className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono text-slate-300 flex items-center gap-1 transition"
+                    className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-mono text-slate-300 flex items-center gap-1.5 transition"
                   >
-                    <span className="truncate max-w-[120px]">{selectedModel}</span>
+                    {(() => {
+                      const activeItem = verifiedModels.find((m) => m.id === selectedModel || m.modelId === selectedModel);
+                      const modeTag = activeItem?.category === "offline" ? "OFFLINE" : activeItem?.category === "online" ? "ONLINE" : "AUTO";
+                      const modeColor =
+                        activeItem?.category === "offline"
+                          ? "text-emerald-300"
+                          : activeItem?.category === "online"
+                          ? "text-cyan-300"
+                          : "text-amber-300";
+                      return (
+                        <>
+                          <span className={`text-[9px] font-bold ${modeColor}`}>{modeTag}</span>
+                          <span className="truncate max-w-[110px]">{activeItem ? activeItem.label.split(" (")[0] : selectedModel}</span>
+                        </>
+                      );
+                    })()}
                     <ChevronDown size={11} className="text-slate-400" />
                   </button>
 
                   {showModelDropdown && (
-                    <div className="absolute bottom-12 right-0 w-56 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs max-h-72 overflow-y-auto">
-                      {[
-                        { id: "Auto", label: "Auto Smart Router" },
-                        { id: "gemini", label: "Google Gemini 2.5 Pro / 2.0" },
-                        { id: "groq", label: "Groq Llama 3.3 70B" },
-                        { id: "deepseek", label: "DeepSeek V3" },
-                        { id: "openai", label: "OpenAI GPT-4o" },
-                        { id: "anthropic", label: "Claude 3.7 Sonnet" },
-                        { id: "github", label: "GitHub Models (GPT-4o)" },
-                        { id: "openrouter", label: "Free LLM (OpenRouter)" },
-                        { id: "ollama", label: "Ollama (Offline Local)" },
-                        { id: "local_lmstudio", label: "Local LM Studio" },
-                      ].map((m) => (
+                    <div className="absolute bottom-12 right-0 w-64 rounded-2xl bg-slate-950/95 border border-white/15 backdrop-blur-2xl shadow-2xl p-1.5 flex flex-col gap-0.5 z-50 text-xs max-h-72 overflow-y-auto">
+                      {verifiedModels.map((m) => (
                         <button
                           key={m.id}
                           onClick={() => {
                             setSelectedModel(m.id);
-                            localStorage.setItem("angel_primary_model", m.id);
+                            localStorage.setItem("angel_active_provider", m.id);
+                            localStorage.setItem("angel_primary_model", m.modelId || m.id);
+                            window.dispatchEvent(
+                              new CustomEvent("angel-model-changed", {
+                                detail: { model: m.modelId || m.id, provider: m.id },
+                              })
+                            );
                             setShowModelDropdown(false);
                           }}
-                          className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 text-xs flex items-center justify-between ${
+                          className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 text-xs flex items-center justify-between gap-2 ${
                             selectedModel === m.id ? "text-cyan-300 font-bold bg-white/10" : "text-slate-300"
                           }`}
                         >
                           <span className="truncate">{m.label}</span>
-                          {selectedModel === m.id && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
-                          )}
+                          <span className="flex items-center gap-1.5 shrink-0">
+                            <span
+                              className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-mono ${
+                                m.category === "offline"
+                                  ? "bg-emerald-500/20 text-emerald-300"
+                                  : m.category === "router"
+                                  ? "bg-amber-500/20 text-amber-300"
+                                  : "bg-cyan-500/20 text-cyan-300"
+                              }`}
+                            >
+                              {m.category}
+                            </span>
+                            {selectedModel === m.id && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                            )}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -1692,6 +1815,10 @@ NEVER produce any Python (.py) code or dependencies.`;
                   )}
                 </div>
               </div>
+
+              <div className="text-center text-[10.5px] text-slate-400/80 pt-0.5 select-none">
+                {ui.labels.aiDisclaimer}
+              </div>
             </div>
         </main>
       </div>
@@ -1759,6 +1886,95 @@ NEVER produce any Python (.py) code or dependencies.`;
       )}
 
       <ArcadeTab open={showArcadeTab} onClose={() => setShowArcadeTab(false)} />
+
+      <LibraryModal
+        open={showLibraryModal}
+        onClose={() => setShowLibraryModal(false)}
+        onOpenWorkshop={() => setWorkspaceMode("workshop")}
+        onOpenMenuTab={(tab) => setActiveModal({ type: "menu", tab })}
+      />
+
+      <GlobalSearchModal
+        open={showSearchModal}
+        onClose={() => setShowSearchModal(false)}
+        sessions={sessions}
+        onSelectSession={handleSelectSession}
+        onOpenLibrary={() => setShowLibraryModal(true)}
+        onOpenMenuTab={(tab) => setActiveModal({ type: "menu", tab })}
+        onOpenWorkshop={() => setWorkspaceMode("workshop")}
+        onRunPrompt={(p) => handleSendMessage(p)}
+      />
+
+      {showAccountModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xl p-4 select-none">
+          <div className="w-full max-w-sm rounded-2xl bg-slate-950/95 border border-cyan-400/40 backdrop-blur-2xl shadow-2xl p-5 space-y-4 text-white">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-indigo-500 text-slate-950 font-black text-xs flex items-center justify-center">
+                  {workspaceProfile.fullName.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <div className="text-xs font-extrabold">{workspaceProfile.fullName}</div>
+                  <div className="text-[10px] font-mono text-slate-400">{workspaceProfile.email}</div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAccountModal(false)}
+                className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="text-[11px] text-slate-300 space-y-1 bg-white/5 border border-white/10 rounded-xl p-3">
+              <div>
+                Role: <b className="text-cyan-300 uppercase">{workspaceProfile.role}</b>
+              </div>
+              <div>
+                Workspace Context: <b className="text-emerald-300">{workspaceProfile.activeContext}</b>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {!isSignedInSession ? (
+                <button
+                  onClick={async () => {
+                    const res = await signInWithGmail();
+                    if (!res.ok && res.error) setMicErrorMessage(res.error);
+                    setShowAccountModal(false);
+                  }}
+                  className="w-full py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-xs transition"
+                >
+                  Sign In with Google (Gmail)
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={async () => {
+                      await signOutWorkspace();
+                      const res = await signInWithGmail();
+                      if (!res.ok && res.error) setMicErrorMessage(res.error);
+                      setShowAccountModal(false);
+                    }}
+                    className="w-full py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-bold text-xs transition"
+                  >
+                    Switch Account
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await signOutWorkspace();
+                      setShowAccountModal(false);
+                    }}
+                    className="w-full py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-200 font-bold text-xs transition"
+                  >
+                    Sign Out
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <DesktopCallBridgePopup />
 

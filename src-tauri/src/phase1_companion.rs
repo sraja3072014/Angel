@@ -94,7 +94,7 @@ pub fn init_phase1_companion(app_handle: tauri::AppHandle) {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(true)
+        .visible(false)
         .build()
         .ok()
     };
@@ -109,7 +109,7 @@ pub fn init_phase1_companion(app_handle: tauri::AppHandle) {
             let pos_y = (screen_h - 420).max(20);
             let _ = pet_win.set_position(tauri::PhysicalPosition::new(pos_x, pos_y));
         }
-        let _ = pet_win.show();
+        let _ = pet_win.hide();
     }
 
     // 1. Throttled Global Cursor Eye/Head Tracking (~25fps, emits only on delta > 2px)
