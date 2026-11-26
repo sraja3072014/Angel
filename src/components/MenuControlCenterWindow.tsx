@@ -214,6 +214,33 @@ export function MenuControlCenterWindow({
   const [cursorCompanion, setCursorCompanion] = useState<boolean>(() => {
     return localStorage.getItem("angel_cursor_companion_enabled") === "true";
   });
+  const [desktopCompanion, setDesktopCompanion] = useState<boolean>(() => {
+    const val = localStorage.getItem("angel_desktop_companion_enabled");
+    return val === null ? true : val === "true";
+  });
+  const [gitBackupStatus, setGitBackupStatus] = useState<{
+    branch: string;
+    remote_url: string;
+    modified_files_count: number;
+    changed_files: string[];
+    last_commit_summary: string;
+  } | null>(null);
+  const [gitBackupMessage, setGitBackupMessage] = useState("");
+  const [isRunningGitBackup, setIsRunningGitBackup] = useState(false);
+  const [gitBackupFeedback, setGitBackupFeedback] = useState<string | null>(null);
+
+  const refreshGitBackupStatus = async () => {
+    try {
+      const status = await invoke<any>("get_git_backup_status");
+      setGitBackupStatus(status);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (activeTab === "api_keys") {
+      refreshGitBackupStatus();
+    }
+  }, [activeTab]);
   const [earthOpacity, setEarthOpacity] = useState<number>(() => {
     const val = localStorage.getItem("angel_earth_opacity");
     return val ? parseFloat(val) : 0.5;
@@ -264,6 +291,13 @@ export function MenuControlCenterWindow({
     emit("cursor-companion-toggle", { enabled: enable }).catch(() => {});
     invoke("toggle_cursor_orb", { enabled: enable }).catch(() => {});
     showToast(enable ? "Floating Cursor Companion Orb Activated" : "Cursor Companion Orb Deactivated");
+  };
+
+  const handleToggleDesktopCompanion = (enable: boolean) => {
+    setDesktopCompanion(enable);
+    localStorage.setItem("angel_desktop_companion_enabled", enable.toString());
+    invoke("set_companion_visible", { visible: enable }).catch(() => {});
+    showToast(enable ? "Desktop 3D Companion Activated" : "Desktop 3D Companion Hidden");
   };
 
   const handleToggleAutoStart = async (enable: boolean) => {
@@ -1566,6 +1600,159 @@ export function MenuControlCenterWindow({
                       </button>
                     </div>
                   </div>
+
+                  {/* Desktop 3D Companion (3D Walking Avatar) */}
+                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-2.5">
+                    <div className="text-xs font-bold text-white flex items-center justify-between">
+                      <span>Desktop 3D Companion (3D Walking Avatar)</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${desktopCompanion ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-800 text-slate-400"}`}>
+                        {desktopCompanion ? "ACTIVE" : "OFF"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Autonomous 3D Angel Female Companion with roaming, cursor IK tracking, lip-sync, and holographic speech bubble.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        onClick={() => handleToggleDesktopCompanion(true)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                          desktopCompanion
+                            ? "bg-emerald-500 text-slate-950 shadow-sm"
+                            : "bg-white/5 text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        Enabled
+                      </button>
+                      <button
+                        onClick={() => handleToggleDesktopCompanion(false)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                          !desktopCompanion
+                            ? "bg-slate-700 text-slate-300"
+                            : "bg-white/5 text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        Disabled
+                      </button>
+                      <label className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-xs font-bold cursor-pointer transition">
+                        <span>Upload Custom .glb</span>
+                        <input
+                          type="file"
+                          accept=".glb,.gltf,.vrm"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              if (typeof reader.result === "string") {
+                                localStorage.setItem("angel_custom_avatar_glb", reader.result);
+                                emit("angel-custom-avatar-changed", {}).catch(() => {});
+                                showToast(`Custom 3D Avatar "${file.name}" loaded!`);
+                              }
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2D ANIMATED COMPANION ENGINE (8 ACTION STATES & CUSTOM SPRITE) */}
+                <div className="p-5 rounded-2xl bg-white/5 border border-white/10 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-bold text-white flex items-center gap-2">
+                        <Sparkles size={15} className="text-cyan-400" />
+                        <span>2D Animated Companion Engine (8 States &amp; Lip-Sync)</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Upload a custom 2D character sprite or select a local preset, and test any of the 8 animation states.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => {
+                          localStorage.setItem("angel_2d_avatar_image", "/assets/avatar/angel_2d_default.png");
+                          window.dispatchEvent(new Event("angel-2d-avatar-changed"));
+                          emit("angel-2d-avatar-changed", { src: "/assets/avatar/angel_2d_default.png" }).catch(() => {});
+                          showToast("Selected Default Angel 2D Sprite!");
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-slate-200 font-semibold"
+                      >
+                        Preset: Angel Blue/Gold
+                      </button>
+                      <button
+                        onClick={() => {
+                          localStorage.setItem("angel_2d_avatar_image", "/angel_primary.png");
+                          window.dispatchEvent(new Event("angel-2d-avatar-changed"));
+                          emit("angel-2d-avatar-changed", { src: "/angel_primary.png" }).catch(() => {});
+                          showToast("Selected Primary Hologram Sprite!");
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-slate-200 font-semibold"
+                      >
+                        Preset: Hologram
+                      </button>
+                      <label className="px-3 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 text-[11px] font-bold cursor-pointer transition">
+                        <span>Upload 2D Image</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/gif"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              if (typeof reader.result === "string") {
+                                localStorage.setItem("angel_2d_avatar_image", reader.result);
+                                window.dispatchEvent(new Event("angel-2d-avatar-changed"));
+                                emit("angel-2d-avatar-changed", { src: reader.result }).catch(() => {});
+                                showToast(`2D Companion Image "${file.name}" applied!`);
+                              }
+                            };
+                            reader.readAsDataURL(file);
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Quick 8-State Preview Switcher */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    {(
+                      [
+                        { id: "idle", label: "Idle" },
+                        { id: "listening", label: "Listening" },
+                        { id: "thinking", label: "Thinking" },
+                        { id: "speaking", label: "Speaking" },
+                        { id: "greeting", label: "Greeting" },
+                        { id: "alert", label: "Alert" },
+                        { id: "happy", label: "Happy" },
+                        { id: "cursor_tracking", label: "Cursor Tracking" },
+                      ] as const
+                    ).map((st) => (
+                      <button
+                        key={st.id}
+                        onClick={() => {
+                          emit("angel-2d-state-preview", { state: st.id }).catch(() => {});
+                          showToast(`Previewing 2D State: ${st.label}`);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-black/40 hover:bg-cyan-500/20 border border-white/10 hover:border-cyan-400/50 text-[11px] text-slate-200 transition"
+                      >
+                        {st.label}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => {
+                        emit("angel-2d-state-preview", { state: null }).catch(() => {});
+                        showToast("2D State reset to Live Auto");
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/40 text-[11px] text-emerald-200 font-bold"
+                    >
+                      Auto Live
+                    </button>
+                  </div>
                 </div>
 
                 {/* 3D CORE THEME SWITCHER (4 SCI-FI CORES) */}
@@ -2666,6 +2853,91 @@ export function MenuControlCenterWindow({
                       <span>{isRestoringGithub ? "Restoring..." : "Restore from GitHub"}</span>
                     </button>
                   </div>
+                </div>
+
+                {/* GITHUB BACKUP & SNAPSHOT (ON-DEMAND LOCAL REPO PUSH) */}
+                <div className="p-4 rounded-xl bg-white/5 border border-cyan-400/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-300">
+                        <FolderGit2 size={16} />
+                      </div>
+                      <div>
+                        <h3 className="text-xs font-bold text-white">GitHub Backup &amp; Snapshot</h3>
+                        <p className="text-[10px] text-slate-400">
+                          On-demand safe repository backup with secret scanning and zero automatic pushes.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={refreshGitBackupStatus}
+                      className="p-1.5 rounded-lg hover:bg-white/10 text-slate-400 hover:text-cyan-300 transition"
+                      title="Refresh Git Status"
+                    >
+                      <RefreshCw size={13} />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-[11px] bg-black/40 border border-white/10 rounded-xl p-2.5">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Current Branch</span>
+                      <span className="font-mono font-bold text-cyan-300">
+                        {gitBackupStatus?.branch || "main"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Uncommitted Changes</span>
+                      <span className="font-mono font-bold text-amber-300">
+                        {gitBackupStatus?.modified_files_count ?? 0} file(s)
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-slate-400 block text-[10px]">Last Commit</span>
+                      <span className="font-mono text-slate-200 truncate block">
+                        {gitBackupStatus?.last_commit_summary || "Checking..."}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={gitBackupMessage}
+                      onChange={(e) => setGitBackupMessage(e.target.value)}
+                      placeholder="Optional commit note (defaults to timestamped backup)..."
+                      className="flex-1 px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
+                    />
+                    <button
+                      onClick={async () => {
+                        setIsRunningGitBackup(true);
+                        setGitBackupFeedback(null);
+                        try {
+                          const res = await invoke<string>("run_github_backup", {
+                            commitMessage: gitBackupMessage.trim() || null,
+                          });
+                          setGitBackupFeedback(res);
+                          setGitBackupMessage("");
+                          await refreshGitBackupStatus();
+                          showToast("GitHub Backup completed!");
+                        } catch (err: any) {
+                          setGitBackupFeedback(`Backup error: ${err?.message || err}`);
+                        } finally {
+                          setIsRunningGitBackup(false);
+                        }
+                      }}
+                      disabled={isRunningGitBackup}
+                      className="px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+                    >
+                      <UploadCloud size={14} />
+                      <span>{isRunningGitBackup ? "Backing up..." : "Backup to GitHub Now"}</span>
+                    </button>
+                  </div>
+
+                  {gitBackupFeedback && (
+                    <div className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-[11px] text-cyan-200">
+                      {gitBackupFeedback}
+                    </div>
+                  )}
                 </div>
 
                 {/* PROVIDER 4: CUSTOM CLOUD / S3 / WEBDAV / NAS */}

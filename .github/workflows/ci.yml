@@ -1,0 +1,43 @@
+name: Project Angel CI/CD Verification
+
+on:
+  push:
+    branches: [ main, "auto-update/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  frontend-verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install Frontend Dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: TypeScript & Vite Production Build
+        run: npm run build
+
+  rust-tauri-verify:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cargo Check (Tauri Backend)
+        run: cargo check --manifest-path src-tauri/Cargo.toml

@@ -2,6 +2,11 @@ import React, { Component, ErrorInfo, ReactNode } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { CursorCompanionOverlay } from "./components/CursorCompanionOverlay";
+import { PetAvatarWindow } from "./components/PetAvatarWindow";
+import { DesktopCompanionStage } from "./components/DesktopCompanionStage";
+import { AnyCraftWindow } from "./components/studios/AnyCraftWindow";
+import { MotionStudioWindow } from "./components/studios/MotionStudioWindow";
+import { ThreeDStudioWindow } from "./components/studios/ThreeDStudioWindow";
 import "./index.css";
 import "./App.css";
 
@@ -61,16 +66,33 @@ class RootErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
   }
 }
 
-// Check window query params to mount either full dashboard or standalone desktop Co-Pilot popup
-const isCopilotMode = typeof window !== "undefined" && (
-  window.location.search.includes("mode=copilot_popup") ||
-  window.location.search.includes("mode=cursor_orb")
-);
+// Check window query params to mount either full dashboard, standalone Co-Pilot popup, Desktop Pet Avatar, or Studio Windows
+const search = typeof window !== "undefined" ? window.location.search : "";
+const isAnyCraftMode = search.includes("mode=studio_anycraft");
+const isMotionStudioMode = search.includes("mode=studio_motion");
+const isThreeDStudioMode = search.includes("mode=studio_threed");
+const isCompanionAvatarMode = search.includes("mode=companion_avatar");
+const isPetAvatarMode = search.includes("mode=angel_pet");
+const isCopilotMode = search.includes("mode=copilot_popup") || search.includes("mode=cursor_orb");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      {isCopilotMode ? (
+      {isCompanionAvatarMode ? (
+        <div className="w-screen h-screen bg-transparent overflow-hidden select-none">
+          <DesktopCompanionStage />
+        </div>
+      ) : isAnyCraftMode ? (
+        <AnyCraftWindow />
+      ) : isMotionStudioMode ? (
+        <MotionStudioWindow />
+      ) : isThreeDStudioMode ? (
+        <ThreeDStudioWindow />
+      ) : isPetAvatarMode ? (
+        <div className="w-screen h-screen bg-transparent overflow-hidden select-none">
+          <PetAvatarWindow />
+        </div>
+      ) : isCopilotMode ? (
         <div className="w-screen h-screen bg-transparent overflow-hidden flex items-center justify-center select-none">
           <CursorCompanionOverlay isStandaloneWindow={true} />
         </div>

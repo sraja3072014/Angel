@@ -37,11 +37,26 @@ import {
 import "./App.css";
 import { CloudBrainService, incrementUsageTelemetry } from "./services/cloudBrain";
 import { AngelVoiceEngine } from "./services/voiceEngine";
+import {
+  AngelWorkspaceProfile,
+  resolveLocalFallbackProfile,
+  signInWithGmail,
+  signOutWorkspace,
+  subscribeToAuthWorkspace,
+} from "./services/supabaseAuth";
 import { MenuControlCenterWindow } from "./components/MenuControlCenterWindow";
 import { CyberShieldSecuritySuite } from "./components/CyberShieldSecuritySuite";
 import { HoloEarthStage } from "./components/HoloEarthStage";
+import { VtuberAvatarStage } from "./components/VtuberAvatarStage";
 import { GeminiSidebar, ChatSession } from "./components/GeminiSidebar";
 import { WorkshopStagePanel } from "./components/WorkshopStagePanel";
+import { PermissionGateModal, PermissionRequest } from "./components/PermissionGateModal";
+import { ToolStoreModal } from "./components/ToolStoreModal";
+import { ArcadeTab } from "./components/arcade/ArcadeTab";
+import { DesktopCallBridgePopup } from "./components/DesktopCallBridgePopup";
+import { angelMcpClient } from "./services/mcpClient";
+import { detectStudioIntent, spawnStudio } from "./services/studioRouter";
+import { deviceSyncService } from "./services/deviceSyncService";
 import {
   detectPhysicalBuildPrompt,
   WORKSHOP_BUILDER_SYSTEM_PROMPT,
@@ -80,6 +95,63 @@ export default function App() {
   const [activeModal, setActiveModal] = useState<{ type: "menu" | "security"; tab: string } | null>(null);
   const [showGetAppModal, setShowGetAppModal] = useState(false);
   const [temporaryChat, setTemporaryChat] = useState(false);
+  const [workspaceProfile, setWorkspaceProfile] = useState<AngelWorkspaceProfile>(() =>
+    resolveLocalFallbackProfile()
+  );
+  const [petVisible, setPetVisible] = useState<boolean>(() => {
+    const saved = localStorage.getItem("angel_desktop_companion_enabled");
+    return saved === null ? true : saved === "true";
+  });
+
+  useEffect(() => {
+    const saved = localStorage.getItem("angel_desktop_companion_enabled");
+    const enabled = saved === null ? true : saved === "true";
+    invoke("set_companion_visible", { visible: enabled }).catch(() => {});
+  }, []);
+  const [isSignedInSession, setIsSignedInSession] = useState(false);
+  const [showToolStore, setShowToolStore] = useState(false);
+  const [showArcadeTab, setShowArcadeTab] = useState(false);
+  const [ecoMode, setEcoMode] = useState<boolean>(() => {
+    return localStorage.getItem("angel_eco_mode_offline") === "true";
+  });
+  const [closeBackupPrompt, setCloseBackupPrompt] = useState<{ count: number; busy: boolean; error?: string } | null>(null);
+  const [pendingPermission, setPendingPermission] = useState<{
+    req: PermissionRequest;
+    resolve: (decision: "allow_once" | "allow_session" | "deny") => void;
+  } | null>(null);
+
+  useEffect(() => {
+    angelMcpClient.setPermissionHandler((req) => {
+      return new Promise((resolve) => {
+        setPendingPermission({ req, resolve });
+      });
+    });
+    return () => {
+      angelMcpClient.setPermissionHandler(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    let disconnectSync = () => {};
+    const unsub = subscribeToAuthWorkspace((prof, session) => {
+      setWorkspaceProfile(prof);
+      setIsSignedInSession(Boolean(session));
+      disconnectSync();
+      disconnectSync = deviceSyncService.connectRealtime(prof);
+    });
+    const unlistenPet = listen<string>("angel-pet-action", (event) => {
+      if (event.payload === "remove_bg") {
+        setWorkspaceMode("chat");
+      } else if (event.payload === "arcade") {
+        setShowArcadeTab(true);
+      }
+    });
+    return () => {
+      unsub();
+      disconnectSync();
+      unlistenPet.then((f) => f());
+    };
+  }, []);
 
   // Workspace Mode: "chat" vs "task" vs "workshop"
   const [workspaceMode, setWorkspaceMode] = useState<"chat" | "task" | "workshop">("chat");
@@ -269,6 +341,12 @@ export default function App() {
     setShowToolsDropdown(false);
     setShowModelDropdown(false);
     setMicErrorMessage(null);
+
+    // Phase 3 Conversational Intent Router: spawn dedicated Acrylic Studio sub-window if matched
+    const studioIntent = detectStudioIntent(prompt);
+    if (studioIntent.matched && studioIntent.studioType) {
+      spawnStudio(studioIntent.studioType, prompt).catch(() => {});
+    }
 
     const userMsgId = `user_${Date.now()}`;
     const userMsg: ChatMessage = {
@@ -961,12 +1039,23 @@ NEVER produce any Python (.py) code or dependencies.`;
       } catch {}
     }
   };
-  const handleClose = () => {
+  const forceCloseApp = () => {
     try {
       getCurrentWebviewWindow().close();
     } catch {
       window.close();
     }
+  };
+
+  const handleClose = async () => {
+    try {
+      const status = await invoke<{ modified_files_count?: number }>("get_git_backup_status");
+      if ((status?.modified_files_count || 0) > 0) {
+        setCloseBackupPrompt({ count: status.modified_files_count || 0, busy: false });
+        return;
+      }
+    } catch {}
+    forceCloseApp();
   };
 
   const handleCopyText = (id: string, text: string) => {
@@ -977,12 +1066,25 @@ NEVER produce any Python (.py) code or dependencies.`;
 
   return (
     <div className="h-screen w-screen flex bg-slate-950 text-white select-none overflow-hidden font-sans relative">
-      {/* 1. AMBIENT 3D SATELLITE EARTH BACKGROUND LAYER */}
-      <div
-        className="fixed inset-0 z-0 pointer-events-none overflow-hidden transition-opacity duration-300"
-        style={{ opacity: earthOpacity }}
-      >
-        <HoloEarthStage speaking={speaking} listening={listening} />
+      {/* 1. AMBIENT 3D SATELLITE EARTH BACKGROUND LAYER (Paused in Local Eco Mode) */}
+      {!ecoMode && (
+        <div
+          className="fixed inset-0 z-0 pointer-events-none overflow-hidden transition-opacity duration-300"
+          style={{ opacity: earthOpacity }}
+        >
+          <HoloEarthStage speaking={speaking} listening={listening} />
+        </div>
+      )}
+
+      {/* 1.5 SLEEK 2D ANIMATED COMPANION STAGE (8 States, Lip-Sync & Cursor Tracking) */}
+      <div className="fixed bottom-24 right-6 z-10 w-[220px] h-[290px] pointer-events-none hidden lg:block">
+        <VtuberAvatarStage
+          speaking={speaking}
+          listening={listening}
+          thinking={isProcessing}
+          alertActive={Boolean(activeThreat)}
+          compact={true}
+        />
       </div>
 
       {/* 2. LEFT COLLAPSIBLE SIDEBAR */}
@@ -1023,6 +1125,90 @@ NEVER produce any Python (.py) code or dependencies.`;
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
+            {/* Multi-User Gmail Auth & Workspace Isolation Pill */}
+            <button
+              onClick={async () => {
+                if (isSignedInSession) {
+                  await signOutWorkspace();
+                } else {
+                  const res = await signInWithGmail();
+                  if (!res.ok && res.error) {
+                    setMicErrorMessage(res.error);
+                  }
+                }
+              }}
+              title={
+                isSignedInSession
+                  ? `Signed in as ${workspaceProfile.email} (${workspaceProfile.role}) — Click to sign out`
+                  : "Sign in with Google (Gmail) for isolated cloud workspace"
+              }
+              className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 transition"
+            >
+              <User size={13} className={workspaceProfile.isRajaAdmin ? "text-emerald-400" : "text-cyan-400"} />
+              <span className="hidden md:inline max-w-[140px] truncate">
+                {isSignedInSession
+                  ? `${workspaceProfile.fullName} (${workspaceProfile.isRajaAdmin ? "Admin" : "User"})`
+                  : "Gmail Login"}
+              </span>
+            </button>
+
+            {/* Desktop Companion Avatar Toggle */}
+            <button
+              onClick={() => {
+                const next = !petVisible;
+                setPetVisible(next);
+                localStorage.setItem("angel_desktop_companion_enabled", next.toString());
+                invoke("set_companion_visible", { visible: next }).catch(() => {});
+              }}
+              title={petVisible ? "Hide Desktop Companion Avatar" : "Show Desktop Companion Avatar"}
+              className={`px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 transition ${
+                petVisible
+                  ? "bg-cyan-500/15 border-cyan-400/50 text-cyan-200"
+                  : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
+              }`}
+            >
+              <Sparkles size={13} className="text-cyan-400" />
+              <span className="hidden lg:inline">Companion</span>
+            </button>
+
+            {/* Hot-Reloadable Tool Store Button */}
+            <button
+              onClick={() => setShowToolStore(true)}
+              title="Open Hot-Reloadable Tool Store (angel_tools)"
+              className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 transition"
+            >
+              <Boxes size={13} className="text-purple-400" />
+              <span className="hidden xl:inline">Tools</span>
+            </button>
+
+            {/* Chill & Arcade Companion Button */}
+            <button
+              onClick={() => setShowArcadeTab(true)}
+              title="Open Chill & Arcade (Chess, Ludo, Voice Games)"
+              className="px-2.5 py-1.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] font-semibold text-slate-200 flex items-center gap-1.5 transition"
+            >
+              <Sparkles size={13} className="text-amber-400" />
+              <span className="hidden xl:inline">Arcade</span>
+            </button>
+
+            {/* 1-Click Local Eco Mode Toggle */}
+            <button
+              onClick={() => {
+                const next = !ecoMode;
+                setEcoMode(next);
+                localStorage.setItem("angel_eco_mode_offline", next.toString());
+              }}
+              title={ecoMode ? "Local Eco Mode Active (Ollama + Web Speech, 3D Paused)" : "Enable Local Eco Mode (Power/Battery Saver)"}
+              className={`px-2.5 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 transition ${
+                ecoMode
+                  ? "bg-emerald-500/20 border-emerald-400/50 text-emerald-200"
+                  : "bg-white/5 border-white/10 text-slate-400 hover:text-white"
+              }`}
+            >
+              <Cpu size={13} className={ecoMode ? "text-emerald-400" : "text-slate-400"} />
+              <span className="hidden xl:inline">{ecoMode ? "Eco On" : "Eco"}</span>
+            </button>
+
             {/* Get App Companion Button */}
             <button
               onClick={() => setShowGetAppModal(true)}
@@ -1511,6 +1697,83 @@ NEVER produce any Python (.py) code or dependencies.`;
       </div>
 
       {/* Master Control Center Glass Modal Overlay */}
+      {closeBackupPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 select-none">
+          <div className="w-full max-w-md rounded-2xl bg-slate-950/95 border border-cyan-400/50 backdrop-blur-2xl shadow-2xl p-5 space-y-4 text-white">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-extrabold text-white">End-of-Day GitHub Backup</h3>
+                <p className="text-xs text-slate-300 mt-1">
+                  You have <b className="text-amber-300">{closeBackupPrompt.count}</b> uncommitted change(s) in this workspace. Would you like to back up to GitHub before closing?
+                </p>
+              </div>
+              <button
+                onClick={() => setCloseBackupPrompt(null)}
+                className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            {closeBackupPrompt.error && (
+              <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-400/40 text-[11px] text-rose-200">
+                {closeBackupPrompt.error}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <button
+                disabled={closeBackupPrompt.busy}
+                onClick={async () => {
+                  setCloseBackupPrompt((prev) => (prev ? { ...prev, busy: true, error: undefined } : null));
+                  try {
+                    await invoke<string>("run_github_backup", { commitMessage: null });
+                    forceCloseApp();
+                  } catch (err: any) {
+                    setCloseBackupPrompt((prev) =>
+                      prev ? { ...prev, busy: false, error: String(err?.message || err) } : null
+                    );
+                  }
+                }}
+                className="flex-1 py-2 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-xs disabled:opacity-50"
+              >
+                {closeBackupPrompt.busy ? "Backing up..." : "Backup to GitHub & Close"}
+              </button>
+              <button
+                disabled={closeBackupPrompt.busy}
+                onClick={forceCloseApp}
+                className="py-2 px-3 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-slate-200 font-bold text-xs"
+              >
+                Close Without Pushing
+              </button>
+              <button
+                disabled={closeBackupPrompt.busy}
+                onClick={() => setCloseBackupPrompt(null)}
+                className="py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ArcadeTab open={showArcadeTab} onClose={() => setShowArcadeTab(false)} />
+
+      <DesktopCallBridgePopup />
+
+      <ToolStoreModal open={showToolStore} onClose={() => setShowToolStore(false)} />
+
+      <PermissionGateModal
+        request={pendingPermission?.req || null}
+        onDecision={(decision) => {
+          if (pendingPermission) {
+            pendingPermission.resolve(decision);
+            setPendingPermission(null);
+          }
+        }}
+      />
+
       {activeModal?.type === "menu" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xl animate-in fade-in duration-150">
           <div className="w-full h-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col box-border z-50 shadow-2xl">

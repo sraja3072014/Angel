@@ -35,6 +35,34 @@
         "resizable": false,
         "shadow": false,
         "visible": false
+      },
+      {
+        "label": "angel-pet",
+        "title": "Angel Companion",
+        "url": "/?mode=angel_pet",
+        "width": 280,
+        "height": 360,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false
+      },
+      {
+        "label": "companion_avatar",
+        "title": "Angel 3D Desktop Companion",
+        "url": "/?mode=companion_avatar",
+        "width": 440,
+        "height": 540,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": true
       }
     ],
     "security": {

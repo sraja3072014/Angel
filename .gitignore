@@ -42,6 +42,11 @@ gen/
 *.bin
 *.exe
 *.msi
+*.mp4
+*.wav
+*.glb
+*.dat
+*.fixed
 
 # Editor directories and files
 .vscode/*

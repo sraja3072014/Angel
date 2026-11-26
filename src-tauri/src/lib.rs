@@ -1,10 +1,14 @@
 pub mod aegis_av;
+pub mod companion_avatar;
 pub mod os_automation;
+pub mod os_control;
 pub mod os_doctor;
+pub mod phase1_companion;
 pub mod plugin_forge;
 pub mod scheduler;
 pub mod smart_firewall;
 pub mod voice_bridge;
+pub mod window_manager;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -1598,6 +1602,173 @@ async fn execute_learned_recipe(user_prompt: String) -> Result<RecipeExecutionRe
     .map_err(|e| format!("Recipe execution error: {e}"))?
 }
 
+fn resolve_repo_root() -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if cwd.ends_with("src-tauri") {
+        cwd.parent().map(|p| p.to_path_buf()).unwrap_or(cwd)
+    } else {
+        cwd
+    }
+}
+
+fn run_git_cmd(repo_root: &std::path::Path, args: &[&str]) -> Result<std::process::Output, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo_root);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.output().map_err(|e| format!("Failed to invoke git: {e}"))
+}
+
+fn redact_remote_url(raw: &str) -> String {
+    if let Some(scheme_idx) = raw.find("://") {
+        let rest = &raw[scheme_idx + 3..];
+        if let Some(at_idx) = rest.find('@') {
+            return format!("{}://***@{}", &raw[..scheme_idx], &rest[at_idx + 1..]);
+        }
+    }
+    raw.to_string()
+}
+
+#[tauri::command]
+fn get_git_backup_status() -> Result<serde_json::Value, String> {
+    let repo_root = resolve_repo_root();
+
+    let branch_out = run_git_cmd(&repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if !branch_out.status.success() {
+        return Err("Workspace is not a valid Git repository.".to_string());
+    }
+    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+
+    let remote_out = run_git_cmd(&repo_root, &["remote", "get-url", "origin"])?;
+    let remote_url = if remote_out.status.success() {
+        redact_remote_url(String::from_utf8_lossy(&remote_out.stdout).trim())
+    } else {
+        "Not configured".to_string()
+    };
+
+    let status_out = run_git_cmd(&repo_root, &["status", "--porcelain"])?;
+    let changed_files: Vec<String> = String::from_utf8_lossy(&status_out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    let log_out = run_git_cmd(&repo_root, &["log", "-1", "--pretty=format:%h %s (%cr)"])?;
+    let last_commit_summary = if log_out.status.success() {
+        String::from_utf8_lossy(&log_out.stdout).trim().to_string()
+    } else {
+        "No commits yet".to_string()
+    };
+
+    Ok(serde_json::json!({
+        "branch": branch,
+        "remote_url": remote_url,
+        "modified_files_count": changed_files.len(),
+        "changed_files": changed_files,
+        "last_commit_summary": last_commit_summary
+    }))
+}
+
+#[tauri::command]
+async fn run_github_backup(commit_message: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let repo_root = resolve_repo_root();
+
+        // 1. Verify valid git repository & origin remote
+        let branch_out = run_git_cmd(&repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        if !branch_out.status.success() {
+            return Err("Workspace is not a valid Git repository.".to_string());
+        }
+        let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+
+        let remote_out = run_git_cmd(&repo_root, &["remote", "get-url", "origin"])?;
+        if !remote_out.status.success() {
+            return Err("Remote 'origin' is not configured in this repository.".to_string());
+        }
+
+        // 2. Check pending changes
+        let status_out = run_git_cmd(&repo_root, &["status", "--porcelain"])?;
+        let changed_lines: Vec<String> = String::from_utf8_lossy(&status_out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+
+        if changed_lines.is_empty() {
+            return Ok("No pending local changes to back up — repository is already up to date.".to_string());
+        }
+
+        // 3. Scan changed paths for obvious secret patterns
+        let secret_markers = [".env", "api_key", "secret", "private_key", "id_rsa"];
+        for line in &changed_lines {
+            let lower = line.to_lowercase();
+            for marker in secret_markers {
+                if lower.contains(marker) && !lower.contains(".env.example") {
+                    return Err(format!(
+                        "Backup aborted by secret guard: suspicious file '{}' matches '{}'.",
+                        line, marker
+                    ));
+                }
+            }
+        }
+
+        // 4. Stage all safe changes
+        let add_out = run_git_cmd(&repo_root, &["add", "-A"])?;
+        if !add_out.status.success() {
+            return Err(format!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&add_out.stderr)
+            ));
+        }
+
+        // Timestamped commit message
+        let ts_out = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Date -Format 'yyyy-MM-dd HH:mm'"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let timestamp = ts_out
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "session".to_string());
+
+        let final_msg = commit_message
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| format!("Backup: Angel AI progress ({timestamp})"));
+
+        let commit_out = run_git_cmd(&repo_root, &["commit", "-m", &final_msg])?;
+        if !commit_out.status.success() {
+            return Err(format!(
+                "git commit failed: {}",
+                String::from_utf8_lossy(&commit_out.stderr)
+            ));
+        }
+
+        let hash_out = run_git_cmd(&repo_root, &["rev-parse", "--short", "HEAD"])?;
+        let commit_hash = String::from_utf8_lossy(&hash_out.stdout).trim().to_string();
+
+        // 5. Push to origin/<branch>
+        let push_out = run_git_cmd(&repo_root, &["push", "-u", "origin", &branch])?;
+        if !push_out.status.success() {
+            return Err(format!(
+                "Committed ({commit_hash}), but git push failed: {}",
+                String::from_utf8_lossy(&push_out.stderr)
+            ));
+        }
+
+        Ok(format!(
+            "Backup complete! Pushed {} file(s) to origin/{} (commit {}) at {}.",
+            changed_lines.len(),
+            branch,
+            commit_hash,
+            timestamp
+        ))
+    })
+    .await
+    .map_err(|e| format!("Backup worker error: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1643,6 +1814,10 @@ pub fn run() {
                 let _ = copilot_win.set_shadow(false);
                 let _ = copilot_win.hide();
             }
+
+            // 3.2 Initialize Phase 1 Desktop Companion Avatar (angel-pet) & 3D Desktop Companion (companion_avatar)
+            phase1_companion::init_phase1_companion(app_handle.clone());
+            companion_avatar::init_companion_avatar(app_handle.clone());
 
             // 4. Background Pre-warm Voice Cache for Sub-10ms Instant Audio
             std::thread::spawn(|| {
@@ -1735,11 +1910,31 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                if window.label() == "main" {
-                    // X button cleanly terminates and exits the entire Angel AI application
-                    window.app_handle().exit(0);
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    if window.label() == "main" {
+                        // X button cleanly terminates and exits the entire Angel AI application
+                        window.app_handle().exit(0);
+                    }
                 }
+                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                    let path_strings: Vec<String> = paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+                    if window.label() == "angel-pet" {
+                        let _ = window.emit(
+                            "angel-pet-file-drop",
+                            phase1_companion::PetFileDropPayload {
+                                paths: path_strings,
+                                prompt_ta: "இந்த ஃபைலோட பேக்ரவுண்ட் ரிமூவ் பண்ணட்டுமா, இல்ல Grace Church App-ல ஏத்தட்டுமா?".to_string(),
+                            },
+                        );
+                    } else if window.label() == "companion_avatar" {
+                        let _ = window.emit("angel-companion-file-drop", path_strings);
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1837,7 +2032,29 @@ pub fn run() {
             toggle_cursor_orb,
             set_cursor_orb_interactive,
             hide_copilot_popup,
-            show_copilot_popup
+            show_copilot_popup,
+            phase1_companion::get_work_timer_status,
+            phase1_companion::reset_work_timer,
+            phase1_companion::trigger_hydration_test,
+            phase1_companion::show_main_dashboard,
+            phase1_companion::toggle_angel_pet,
+            phase1_companion::run_autonomous_dev_task,
+            os_control::os_read_safe_file,
+            os_control::os_write_safe_file,
+            os_control::os_launch_application,
+            os_control::os_get_clipboard_text,
+            os_control::os_set_clipboard_text,
+            os_control::os_inspect_active_window,
+            os_control::os_capture_active_screen_base64,
+            window_manager::spawn_studio_window,
+            window_manager::broadcast_studio_state,
+            window_manager::close_studio_window,
+            companion_avatar::set_companion_visible,
+            companion_avatar::move_companion_window,
+            companion_avatar::get_global_cursor_and_window_rect,
+            companion_avatar::toggle_main_dashboard_window,
+            get_git_backup_status,
+            run_github_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running Project Angel");

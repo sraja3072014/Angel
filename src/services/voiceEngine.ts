@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { loadAngelConfig } from "./cloudBrain";
 
 export interface AngelVoiceConfig {
@@ -697,7 +698,21 @@ export class AngelVoiceEngine {
 export const angelVoice = new AngelVoiceEngine();
 
 export async function speakText(text: string, onStart?: () => void, onEnd?: () => void): Promise<void> {
-  await angelVoice.speak(text, onStart, onEnd);
+  emit("angel-speech-start", { text }).catch(() => {});
+  try {
+    await angelVoice.speak(
+      text,
+      () => {
+        onStart?.();
+      },
+      () => {
+        emit("angel-speech-end", {}).catch(() => {});
+        onEnd?.();
+      }
+    );
+  } finally {
+    emit("angel-speech-end", {}).catch(() => {});
+  }
 }
 
 export async function speakSecurityAlert(tamilText: string, playChime = true): Promise<void> {

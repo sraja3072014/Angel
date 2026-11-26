@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { cloudBrain } from "../services/cloudBrain";
 import { speakText } from "../services/voiceEngine";
+import { useScreenVision } from "../hooks/useScreenVision";
 
 export interface ActiveAppContextWithSelection {
   app_name: string;
@@ -43,6 +44,7 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
   const [isProcessing, setIsProcessing] = useState(false);
   const [quickAnswer, setQuickAnswer] = useState("");
   const [pastedStatus, setPastedStatus] = useState<string | null>(null);
+  const screenVision = useScreenVision();
 
   // Three.js Mount Ref
   const mountRef = useRef<HTMLDivElement>(null);
@@ -297,11 +299,18 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     setQuickAnswer("");
 
     try {
-      const contextualPrompt = `[Foreground Application: ${activeApp.app_name} | Window: ${activeApp.window_title}]\nUser Request: ${userQ}`;
-      const response = await cloudBrain.askGemini(contextualPrompt, {
-        onChunk: (chunk) => setQuickAnswer(chunk),
-      });
-      setQuickAnswer(response);
+      if (
+        /ஸ்கிரீன்|screen|எரர்|error|fix this/i.test(userQ)
+      ) {
+        const res = await screenVision.analyzeActiveScreen(userQ);
+        setQuickAnswer(res.answer);
+      } else {
+        const contextualPrompt = `[Foreground Application: ${activeApp.app_name} | Window: ${activeApp.window_title}]\nUser Request: ${userQ}`;
+        const response = await cloudBrain.askGemini(contextualPrompt, {
+          onChunk: (chunk) => setQuickAnswer(chunk),
+        });
+        setQuickAnswer(response);
+      }
     } catch (err: any) {
       setQuickAnswer(`Error: ${err?.message || err}`);
     } finally {
@@ -323,18 +332,15 @@ export function CursorCompanionOverlay({ isStandaloneWindow = false }: { isStand
     }
   };
 
-  // Screen Vision quick trigger
+  // Screen Vision quick trigger (Phase 2: Active Window Context + RAM Frame + Semantic Recall)
   const handleInspectScreen = async () => {
     setIsProcessing(true);
     setQuickAnswer("Capturing and inspecting active app screen...");
     try {
-      const b64 = await invoke<string>("capture_screen_base64");
-      const prompt = `Inspect active application (${activeApp.app_name}: ${activeApp.window_title}). Provide concise tactical guidance, translation, or content to paste.`;
-      const response = await cloudBrain.askGemini(prompt, {
-        screenBase64: b64,
-        onChunk: (chunk) => setQuickAnswer(chunk),
-      });
-      setQuickAnswer(response);
+      const res = await screenVision.analyzeActiveScreen(
+        `Inspect active application (${activeApp.app_name}: ${activeApp.window_title}). Provide concise guidance, code fix, or content to paste.`
+      );
+      setQuickAnswer(res.answer);
     } catch (err: any) {
       setQuickAnswer(`Inspection failed: ${err?.message || err}`);
     } finally {
